@@ -1,0 +1,98 @@
+/**
+ * The GUI for running analyses on groups of trials.
+ *
+ * @author   Kjartan Halvorsen
+ * @version  1.0  2003-04-14
+ */
+
+package kha.hm;
+
+import java.util.*;
+import javax.swing.*;
+import java.awt.*;
+import java.awt.event.*;
+import java.sql.*;
+
+import cern.colt.matrix.*;
+
+import kha.db.*;
+import kha.track.*;
+
+public class AnalyzeGUI extends JPanel implements ActionListener {
+
+    private static AnalyzeGUI theGUI = null;
+
+    private GroupChooser groupchooser;
+    private JComboBox analysischooser;
+    
+    private AnalyzeGUI(HeadMotionDB database, TrialGUI tg,
+		       JFrame parent) {
+	super();
+	
+	this.groupchooser = new GroupChooser(database,tg,parent);
+
+	// Construct list of analyses
+	this.analysischooser = new JComboBox();
+	this.analysischooser.addItem(new ScaledWorkAnalysis());
+	this.analysischooser.addItem(new ScaledWorkRetestAnalysis());
+	this.analysischooser.addItem(new DiagnosisAnalysis());
+	this.analysischooser.addItem(new EditAnalysis());
+	this.analysischooser.addItem(new PrintInfoAnalysis());
+	this.analysischooser.setEditable(false);
+
+	setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
+	add(this.groupchooser);
+	JPanel acpanel = new JPanel();
+	acpanel.add(this.analysischooser);
+	acpanel.setBorder(
+		  BorderFactory.createCompoundBorder(
+	    BorderFactory.createTitledBorder("Choose analysis"),
+	       BorderFactory.createEmptyBorder(6,3,6,3)));
+	add(acpanel);
+    }
+
+    public static AnalyzeGUI getInstance(HeadMotionDB db, TrialGUI tg,
+					 JFrame parent) {
+	if (theGUI == null) {
+	    theGUI = new AnalyzeGUI(db, tg, parent);
+	}
+	return theGUI;
+    }
+
+    public static AnalyzeGUI getInstance() {
+	return theGUI;
+    }
+
+    public static ActionListener getActionListener() {
+	return theGUI;
+    }
+
+    public static GroupChooser getGroupChooser() {
+	return theGUI.groupchooser;
+    }
+
+    /** 
+     * The ActionEvent indicates that the current analysis should be 
+     * performed on the current group
+     */
+    public void actionPerformed(ActionEvent e) {
+	Group[] groups = this.groupchooser.getCurrentGroups();
+	
+	if (groups.length == 1) {
+	    Group g = groups[0].copy();
+	    Analysis an = (Analysis) this.analysischooser.getSelectedItem();
+	    Group badgroup = an.analyze(g);
+	    an.display(g);
+	    if ((badgroup != null) && badgroup.size()>0)
+		this.groupchooser.addGroup(badgroup, false);
+	} else if (groups.length > 1) {
+	    Group g1 = groups[0].copy();
+	    Group g2 = groups[1].copy();
+	    Analysis an = (Analysis) this.analysischooser.getSelectedItem();
+	    Group badgroup = an.compare(g1,g2);
+	    if ((badgroup != null) && badgroup.size()>0)
+		this.groupchooser.addGroup(badgroup,false);
+	}
+    }
+    
+}

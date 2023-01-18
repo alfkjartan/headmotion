@@ -1,0 +1,149 @@
+/**
+ * Computes the scaled work for the trials in the group, reduces the set
+ * of trials by computing the mean over similar trials (similar trials are
+ * trials with identical subject_id and test_type fields). Finally, the
+ * class displays the result, grouped by test_type.
+ * Implements Analysis
+ *
+ * @author   Kjartan Halvorsen
+ * @version  1.0  2003-04-23
+ */
+
+package kha.track;
+
+import java.util.*;
+import javax.swing.JOptionPane;
+import javax.swing.ProgressMonitor;
+import cern.colt.matrix.*;
+import kha.hm.*;
+
+public class ScaledWorkAnalysis extends  Analysis {
+    
+    private DataTransform dt = new AbsoluteScaledWork();
+    private Display displ = new PlotSinglePointVSTypeDisplay();
+    private Comparison wtest = new WilcoxonTestComparison();
+    private BriefStatDescription bdesc = new BriefStatDescription();
+
+    public  Group analyze(Group g) {
+	Group badgroup = g.map(dt);
+	g.consolidate();
+	Hashtable resHash = bdesc.describe(g);
+	StringBuffer resstr = new StringBuffer();
+	for (Enumeration keys=resHash.keys(); keys.hasMoreElements();) {
+	    String key = (String) keys.nextElement();
+	    resstr.append(key).append("=").append(resHash.get(key));
+	    resstr.append("\n");
+	}
+
+	JOptionPane.showMessageDialog(null, "Summarizing MEI of group " + 
+				      g.toString() + ".\n\n" +
+				      resstr.toString());
+	
+
+	Vector data = new Vector(g.size()+1);
+
+	data.add(g.getDescription());
+
+	for (Iterator it = g.trials(); it.hasNext();)
+	    data.add(((Trial) it.next()).getData());
+
+	displ.displaySet(data, this.toString());
+	displ.setYLabel("mei");
+
+	return badgroup;
+    }
+    
+    public Group compare(Group g1, Group g2){
+
+	System.err.println("###DEBUG: group1: " + g1.size() +
+			   "  group2: " + g2.size());
+
+	int g1s = g1.size();
+	int g2s = g2.size();
+
+	ProgressMonitor pgm = 
+	    new ProgressMonitor(AnalyzeGUI.getInstance(),
+				this.toString(),
+				"Processing group:  " + g1.getDescription(), 
+				0, g1s + g2s);
+
+	pgm.setProgress(0);
+
+	Group bad1 = g1.map(dt,pgm,0);
+	g1.consolidate();
+	
+	if (pgm.isCanceled()) 
+	    return null;
+	pgm.setNote("Processing group:  " + g2.getDescription());
+	Group bad2 = g2.map(dt,pgm,g1s);
+	g2.consolidate();
+	
+	if (pgm.isCanceled()) 
+	    return null;
+	pgm.close();
+
+	// Do a comparison, Wilcoxon rank sum. And present results
+	double significance = 0.95;
+	boolean res = wtest.compare(g1,g2,significance);
+	Hashtable resHash = wtest.getResults();
+	StringBuffer resstr = new StringBuffer();
+	for (Enumeration keys=resHash.keys(); keys.hasMoreElements();) {
+	    String key = (String) keys.nextElement();
+	    resstr.append(key).append("=").append(resHash.get(key));
+	    resstr.append("\n");
+	}
+
+	JOptionPane.showMessageDialog(null, "Testing the difference of " +
+				      "groups\n" + 
+				      "Group 1: " + g1.toString() + "\nand\n" +
+				      "Group 2: " + g2.toString() + "\n" +
+				      "Using the Wilcoxon rank sum " +
+				      "(a.k.a. Mann-Whitney) test for " +
+				      "two independent samples.\n\n" +
+				      "Keep the H0 (groups equal) " +
+				      " hypothesis: " + res +
+				      "\nResults:\n" + resstr.toString());
+	
+
+	Vector data = new Vector(2);
+
+ 	System.err.println("###DEBUG: group1: " + g1.size() +
+			   "  group2: " +  g2.size());
+
+	Vector data1 = new Vector(g1.size()+1);
+	Vector data2 = new Vector(g2.size()+1);
+
+	data1.add(g1.getDescription());
+	data2.add(g2.getDescription());
+
+	for (Iterator it = g1.trials(); it.hasNext();)
+	    data1.add(((Trial) it.next()).getData());
+	for (Iterator it = g2.trials(); it.hasNext();)
+	    data2.add(((Trial) it.next()).getData());
+
+ 	System.err.println("###DEBUG: data1: " + data1.size() +
+			   "  data2: " +  data2.size());
+
+	data.add(data1);
+	data.add(data2);
+
+	displ.displaySet(data, this.toString());
+	displ.setYLabel("eei");
+
+	bad1.join(bad2);
+	bad1.setDescription(toString() + ", bad trials. Groups:   " +
+			    g1.getDescription() + ",  " +
+			    g2.getDescription());
+	return bad1;
+    }
+
+    public String toString() {
+	return "Movement Energy Index";
+    }
+
+}
+
+
+
+
+

@@ -1,0 +1,205 @@
+package kha.db;
+
+/**
+ * Title:        testblob
+ * Description:  test of using blobs in a database, connecting over 
+ *               the internet. Based on testdb, see below.
+ * Author:       Kjartan Halvorsen, 2003-02-18
+ *
+ *
+ * Title:        testdb
+ * Description:  simple hello world db example of a
+ *               standalone persistent db application
+ *
+ *               every time it runs it adds four more rows to sample_table
+ *               it does a query and prints the results to standard out
+ *
+ * Author: Karl Meissner karl@meissnersd.com
+ */
+import java.sql.*;
+import cern.colt.matrix.*;
+
+public class testblob {
+
+    static DoubleFactory2D f2 = DoubleFactory2D.dense;
+
+    Connection conn;    //our connnection to the db - presist for life of program
+                        // we dont want this garbage collected until we are done
+
+    public testblob(String db_file_name_prefix) throws Exception    // note more general exception
+    {
+
+        // Load the HSQL Database Engine JDBC driver
+        // hsqldb.jar should be in the class path or made part of the current jar
+        Class.forName("org.hsqldb.jdbcDriver");
+
+        // connect to the database.   This will load the db files and start the
+        // database if it is not alread running.
+        // db_file_name_prefix is used to open or create files that hold the state
+        // of the db.
+        // It can contain directory names relative to the
+        // current working directory
+        conn = DriverManager.getConnection(
+			     "jdbc:hsqldb:hsql://213.89.60.54:9001:",
+			     "sa",                    // username
+			     "");                     // password
+    }
+
+    public void shutdown() throws SQLException {
+
+        conn.close();   // if there are no other open connection
+                        // db writes out to files and shuts down
+                        // this happens anyway at garbage collection
+                        // when program ends
+    }
+
+//use for SQL commands CREATE and SELECT
+    public synchronized void query(String expression) throws SQLException {
+
+        Statement st = null;
+        ResultSet rs = null;
+
+        st = conn.createStatement();            // statement objects can be reused with
+                                                // repeated calls to execute but we
+                                                // choose to make a new one each time
+        rs = st.executeQuery(expression);       // run the query
+
+        // do something with the result set.
+        dump(rs);
+        st.close();     // NOTE!! if you close a statement the associated ResultSet is
+                        // closed too
+                        // so you should copy the contents to some other object.
+                        // the result set is invalidated also  if you recycle an Statement
+                        // and try to execute some other query before the result set has been
+                        // completely examined.
+    }
+
+//use for SQL commands DROP and INSERT and UPDATE
+    public synchronized void update(String expression) throws SQLException {
+
+        Statement st = null;
+
+        st = conn.createStatement();                // statements
+
+        int i = st.executeUpdate(expression);       // run the query
+
+        if (i == -1) {
+            System.out.println("db error : " + expression);
+        }
+
+        st.close();
+    }    // void update()
+
+    public synchronized void update(String expression,
+				    DoubleMatrix2D data) throws SQLException {
+
+        PreparedStatement st = null;
+
+        st = conn.prepareStatement(expression);                // statements
+	
+	st.setObject(1,data);
+
+        int i = st.executeUpdate();       // run the query
+
+        if (i == -1) {
+            System.out.println("db error : " + expression);
+        }
+
+        st.close();
+    }    // void update()
+
+    public static void dump(ResultSet rs) throws SQLException {
+
+        // the order of the rows in a cursor
+        // are implementation dependent unless you use the SQL ORDER statement
+        ResultSetMetaData meta   = rs.getMetaData();
+        int               colmax = meta.getColumnCount();
+        int               i;
+        Object            o       = null;
+
+        // the result set is a cursor into the data.  You can only
+        // point to one row at a time
+        // assume we are pointing to BEFORE the first row
+        // rs.next() points to next row and returns true
+        // or false if there is no next row, which breaks the loop 
+
+        for (;rs.next();) {
+            for (i = 0; i < colmax; ++i) {
+                o = rs.getObject(i + 1);    
+		// Is SQL the first column is indexed
+		// with 1 not 0
+		
+                System.out.println(o.getClass().toString());
+
+		try {
+		    DoubleMatrix2D data = (DoubleMatrix2D) o;
+		    System.out.println("Data. rows: " + data.rows() + 
+				       "columns: " + data.columns());
+		} catch (Exception e){
+		    System.out.println(o.toString());
+		}
+            }
+
+            System.out.println(" ");
+        }
+    }                                       //void dump( ResultSet rs )
+
+    public static void main(String[] args) {
+
+        testblob db = null;
+
+        try {
+            db = new testblob("db_file");
+        } catch (Exception ex1) {
+            ex1.printStackTrace();          // could not start db
+
+            return;                         // bye bye
+        }
+
+        try {
+
+            //make an empty table
+            //
+            // by declaring the id column IDENTITY, the db will automatically
+            // generate unique values for new rows- useful for row keys
+            db.query(
+                "CREATE CACHED TABLE blob_table ( id INTEGER IDENTITY, name VARCHAR(256), year_of_birth INTEGER, data OTHER)");
+        } catch (SQLException ex2) {
+
+            //ignore
+            //ex2.printStackTrace();  // second time we run program
+            //  should throw execption since table
+            // already there
+            //
+            // this will have no effect on the db
+        }
+
+        try {
+
+            // add some rows - will create duplicates if run more then once
+            // the id column is automatically generated
+            db.update("INSERT INTO blob_table(name,year_of_birth) " +
+		      "VALUES('Pelle', 1940)");
+	    db.update("UPDATE blob_table SET data = ? WHERE name='Pelle'",
+		      f2.identity(4));
+            db.update("INSERT INTO blob_table(name,year_of_birth) " +
+		      "VALUES('Anna', 1973)");
+	    db.update("UPDATE blob_table SET data = ? WHERE name='Anna'",
+		      f2.random(500,12));
+            db.update("INSERT INTO blob_table(name,year_of_birth) " +
+		      "VALUES('Kjartan', 1972)");
+	    db.update("UPDATE blob_table SET data = ? WHERE name='Kjartan'",
+		      f2.make(2400,24));
+
+            // do a query
+            db.query("SELECT * FROM blob_table WHERE year_of_birth > 1970");
+            db.query("SELECT * FROM blob_table WHERE year_of_birth = 1972");
+
+            // at end of program
+            db.shutdown();
+        } catch (SQLException ex3) {
+            ex3.printStackTrace();
+        }
+    }    // main()
+}    // class testblob
+

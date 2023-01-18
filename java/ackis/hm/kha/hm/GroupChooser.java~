@@ -1,0 +1,206 @@
+/**
+ * GUI for adding and editing groups.
+ * @author   Kjartan Halvorsen
+ * @version  1.0  2003-04-13
+ */
+
+package kha.hm;
+
+import java.util.*;
+import java.sql.*;
+import javax.swing.*;
+import java.awt.*;
+import java.awt.event.*;
+
+import kha.db.*;
+import kha.math.*;
+
+public class GroupChooser extends JPanel {
+
+    private JFrame parentframe;
+    private HeadMotionDB database;
+    private TrialGUI trialsgui;
+
+    private Vector groups;
+    private JList glist;
+    private GroupGUI groupgui;
+
+    public GroupChooser(HeadMotionDB db, TrialGUI tg, JFrame frame) {
+	super();
+	this.database = db;
+	this.trialsgui = tg;
+	this.parentframe = frame;
+	this.groupgui = GroupGUI.getInstance(db,tg.getFields(),
+					     this.parentframe);
+	createGUI();
+    }
+
+
+    public Group getCurrentGroup() {
+	return (Group) this.glist.getSelectedValue();
+    }
+
+    public Group[] getCurrentGroups() {
+	Object[] objs = this.glist.getSelectedValues();
+	Group[] groups = new Group[objs.length];
+	for (int i=0; i<objs.length; i++) 
+	    groups[i] = (Group) objs[i];
+	return groups;
+    }
+
+    public void addGroup(Group g, boolean update) {
+	this.groups.add(g);
+	this.glist.setListData(this.groups);
+	if (update) {
+	    try {
+		g.updateDatabase(this.database);
+	    } catch (SQLException ex) {
+		System.err.println("Could not update group " +
+				   "database.");
+		System.err.println(ex.getMessage());
+	    }
+	}
+    }
+
+    private void createGUI() {
+	// Look for groups in the database
+	groups = groupsInDB();
+	glist = new JList(groups);
+	// De-comment the next line to force the user
+	// to only select one group at the time.
+	//glist.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+	JScrollPane gpane = new JScrollPane(glist);
+
+	// buttons
+	JPanel btnp = new JPanel();
+	btnp.setLayout(new GridLayout(0,1));
+	JButton addbtn = new JButton("New");
+	addbtn.addActionListener(new ActionListener() {
+		public void actionPerformed(ActionEvent ev) {
+		    addNewGroup();
+		}
+	    });
+	btnp.add(addbtn);
+
+	JButton editbtn = new JButton("Edit");
+	editbtn.addActionListener(new ActionListener() {
+		public void actionPerformed(ActionEvent ev) {
+		    editGroup();
+		}
+	    });
+	btnp.add(editbtn);
+
+	JButton delbtn = new JButton("Delete");
+	delbtn.addActionListener(new ActionListener() {
+		public void actionPerformed(ActionEvent ev) {
+		    deleteGroup();
+		}
+	    });
+	btnp.add(delbtn);
+
+	setLayout(new BoxLayout(this,BoxLayout.X_AXIS));
+	
+	add(gpane);
+	add(btnp);
+	setBorder(
+		  BorderFactory.createCompoundBorder(
+		     BorderFactory.createTitledBorder("Groups"),
+		     BorderFactory.createEmptyBorder(6,3,6,3)));
+    }
+
+    private Vector groupsInDB() {
+	ResultSet rs = this.database.inquire("SELECT * FROM " +
+					     HeadMotionDB.GROUP_TABLE);
+	Vector vec = new Vector();
+
+	try {
+	    for (; rs.next();) {
+		vec.add(createGroup(rs));
+	    }
+	    rs.close();
+	} catch (SQLException ee) {
+	    System.err.println("Exception in GroupChooser.java. ");
+	    System.err.println(ee.getMessage());
+	}
+
+	for (Iterator it = vec.iterator(); it.hasNext();) 
+	    ((Group) it.next()).loadTrials(this.database);
+
+	return vec;
+    }
+
+    private Group createGroup(ResultSet rs) {
+	Group group = null;
+	try {
+	    int id = rs.getInt(1);
+	    String description = rs.getString(2);
+	    Vector trialsind = (Vector) rs.getObject(3);
+	    
+	    group = new Group(id,description, null, trialsind);
+	    
+	} catch (SQLException e) {
+	    System.err.println("Could not create Group object from " +
+			       "ResultSet.");
+	    System.err.println(e.getMessage());
+	}
+	return group;
+    }
+
+
+    /**
+     * The ActionEvent caused by the "Add" button ends up here.
+     */
+    private void addNewGroup() {
+	String descr = 
+	    JOptionPane.showInputDialog("Enter a description for the group");
+	ResultSet rs = this.database.inquire("SELECT MAX(group_id) FROM " +
+					     HeadMotionDB.GROUP_TABLE);
+	try {
+	    rs.next();
+	    int nextid = rs.getInt(1) + 1;
+	    rs.close();
+	    Group group = new Group(nextid, descr);
+	    this.groupgui.show(group); // Returns when the user clicks "Done"
+	    if (group.getAllTrials().size()>0) 
+		this.addGroup(group,true);
+	} catch (SQLException ee) {
+	    System.err.println("Could not update Group table");
+	    System.err.println(ee.getMessage());
+	    ee.printStackTrace();
+	}
+    }
+
+    /**
+     * The ActionEvent caused by the "Edit" button ends up here.
+     */
+    private void editGroup() {
+	Group group = (Group) glist.getSelectedValue();
+	this.groupgui.show(group); // Returns when the user clicks "Done"
+	if (group.getAllTrials().size()==0) { //delete empty group}
+	    deleteGroup();
+	} else {
+	    try {
+		group.updateDatabase(this.database);
+		this.glist.setListData(this.groups);
+	    } catch (SQLException ee) {
+		System.err.println("Could not update Group table");
+		System.err.println(ee.getMessage());
+		ee.printStackTrace();
+	    }
+	}
+    }	
+	
+    /**
+     * The ActionEvent caused by the "Remove" button ends up here.
+     */
+    private void deleteGroup() {
+	Group group = (Group) glist.getSelectedValue();
+	this.groups.removeElement(group);
+	this.glist.setListData(this.groups);
+	this.database.execute("DELETE FROM " +
+			      HeadMotionDB.GROUP_TABLE +
+			      " WHERE group_id=" + group.getId());
+    }
+
+
+}

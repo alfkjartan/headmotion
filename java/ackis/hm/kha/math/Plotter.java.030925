@@ -1,0 +1,472 @@
+/* A simple plotter. Freely after the TwoPlotExample in the PtPlot package.
+ * 2001-10-28
+ * @author: Kjartan Halvorsen
+ */
+
+
+package kha.math;
+
+import java.io.*;
+import java.util.*;
+import java.awt.*;
+import java.awt.print.*;
+import java.awt.event.*;
+import java.awt.geom.*;
+import javax.swing.*;
+import javax.swing.filechooser.*;
+
+import ptolemy.plot.*;
+import cern.colt.matrix.*;
+
+import kha.hm.*;
+
+public class Plotter extends JFrame implements Printable, ActionListener {
+
+    
+    final static BasicStroke stroke = new BasicStroke(2.0f);
+    final static BasicStroke wideStroke = new BasicStroke(8.0f);
+
+    final static float dash1[] = {10.0f};
+    final static BasicStroke dashed = new BasicStroke(1.0f,
+                                                      BasicStroke.CAP_BUTT,
+                                                      BasicStroke.JOIN_MITER,
+                                                      10.0f, dash1, 0.0f);
+  
+    private static int w_width = 700;
+    private static int w_height = 600;
+    private static int w_margin_v = 10;
+    private static int w_margin_h = 10;
+
+    private static DoubleFactory2D f2 = DoubleFactory2D.dense;
+
+    private JPanel plotPanel;
+    private Plot[] thePlots;
+    private int currentPlot;
+
+    private Vector[] theData;
+
+    private String[] headers = new String[] {};
+    
+    private JButton logbtn;
+
+    public Plotter() {
+	this("");
+    }
+    public Plotter(String title) {
+	super(title);
+
+        // Instantiate the plot.
+	Plot thePlot = new Plot();
+	thePlots = new Plot[1];
+	thePlots[0]=thePlot;
+	currentPlot=0;
+
+	// The vector holding the data
+	theData = new Vector[1];
+
+        // Set the size of the toplevel window.
+        setSize(w_width, w_height);
+
+	thePlot.setBackground(Color.white);
+
+        // Create the plot by calling methods.
+        thePlot.setSize(w_width-w_margin_h*2,w_height-w_margin_v*2);
+        thePlot.setTitle(title);
+	// Set a different title font
+	thePlot.setTitleFont("Arial-BOLD-12");
+
+        // Layout the plot
+	plotPanel = new JPanel();
+	plotPanel.add(thePlot);
+
+	// Create buttons
+	Component pbtn = createButtons();
+
+        getContentPane().setLayout(new BorderLayout());
+        getContentPane().add(pbtn,BorderLayout.NORTH);
+        getContentPane().add(plotPanel,BorderLayout.CENTER);
+	
+	pack();
+        show();
+    }
+
+
+    public Plotter(String title,int nplots) {
+	super(title);
+
+        // Set the size of the toplevel window.
+        setSize(w_width, w_height);
+
+        // Instantiate the plots.
+	thePlots = new Plot[nplots];
+
+	theData = new Vector[nplots];
+
+	currentPlot=0;
+	int plot_h = (w_height-w_margin_v*nplots)/nplots;
+
+        // Layout the plot
+        // Layout the plot
+	plotPanel = new JPanel();
+	plotPanel.setLayout(new BoxLayout(plotPanel,
+					  BoxLayout.Y_AXIS));
+	for (int i=0; i<nplots; i++) {
+	    Plot thePlot = new Plot();
+	    thePlot.setBackground(Color.white);
+	    thePlots[i]=thePlot;
+
+	    // Create the plot by calling methods.
+	    thePlot.setSize(w_width-w_margin_h*2,plot_h);
+
+	    // Set a different title font
+	    thePlot.setTitleFont("Arial-BOLD-12");
+
+	    // Add the plot
+	    plotPanel.add(thePlot);
+	}
+
+	// Create buttons
+	Component pbtn = createButtons();
+
+        getContentPane().setLayout(new BorderLayout());
+        getContentPane().add(pbtn,BorderLayout.NORTH);
+        getContentPane().add(plotPanel,BorderLayout.CENTER);
+	
+	pack();
+        show();
+    }
+
+    private Component createButtons() {
+	JPanel btnPanel = new JPanel();
+	logbtn = new JButton("Log");
+	logbtn.addActionListener(this);
+	btnPanel.add(logbtn);
+	JButton colorbtn = new JButton("Black/White");
+	colorbtn.addActionListener(this);
+	btnPanel.add(colorbtn);
+	JButton printbtn = new JButton("Print");
+	printbtn.addActionListener(this);
+	btnPanel.add(printbtn);
+	JButton epsprintbtn = new JButton("EPS Print");
+	epsprintbtn.addActionListener(new EPSPrinter(this));
+	btnPanel.add(epsprintbtn);
+	JButton tofilebtn = new JButton("Export to file");
+	tofilebtn.addActionListener(this);
+	btnPanel.add(tofilebtn);
+	JButton closebtn = new JButton("Close");
+	closebtn.addActionListener(this);
+	btnPanel.add(closebtn);
+
+	return btnPanel;
+    }
+
+    /** 
+     * Clears all data from the plots.
+     */
+    public void clear() {
+	for (int i=0; i<thePlots.length; i++) {
+	    if (thePlots[i] != null)
+		thePlots[i].clear(true);
+
+	    if (theData[i] != null)
+		theData[i].removeAllElements();
+	}
+	repaint();
+    }
+
+    public Plot getCurrentPlot() {
+	return thePlots[currentPlot];
+    }
+
+    public void setCurrentPlot(int i) {
+	if (i<thePlots.length && i>-1)
+	    this.currentPlot = i;
+    }
+
+    public int getNumOfPlots() {
+	return thePlots.length;
+    }
+
+    public void addData(DoubleMatrix2D data) {
+	if (data.columns()==2) {
+	    addData(data.viewColumn(0),data.viewColumn(1));
+	}
+    }
+
+
+    public void addData(DoubleMatrix1D x) {
+	DoubleMatrix1D t=KAlgebra.linspace(1.0,
+					   (double) x.size(), x.size());
+	addData(t,x);
+    }
+	
+    public synchronized void addData(DoubleMatrix1D x,DoubleMatrix1D y) {
+	if (x.size()==y.size()) {
+	    int nseries = thePlots[currentPlot].getNumDataSets();
+	    for (int i=0; i<x.size(); i++) {
+		thePlots[currentPlot].addPoint(nseries,x.getQuick(i),
+				 y.getQuick(i),true);
+	    }
+	    theData[currentPlot].add(x);
+	    theData[currentPlot].add(y);
+	}
+    }
+
+    public void addXTick(String t, double pos) {
+	thePlots[currentPlot].addXTick(t,pos);
+    }
+
+    public void export (OutputStream out) {
+	thePlots[currentPlot].export(out);
+    }
+
+    public void setHeaders(String[] h) {
+	this.headers = h;
+    }
+
+    public void setYLog(boolean ylogtrue) {
+	thePlots[currentPlot].setYLog(ylogtrue);
+	if (ylogtrue) {
+		logbtn.setText("Linear");
+	} else {
+	    logbtn.setText("Log");
+	}
+	thePlots[currentPlot].repaint();
+    }
+
+    public void actionPerformed(ActionEvent ev) {
+	if (ev.getSource() instanceof JButton) {
+	    JButton caller = (JButton) ev.getSource();
+	    if (caller.getText().equals("Print")) {
+		PrinterJob printJob = PrinterJob.getPrinterJob();
+		printJob.setPrintable(this);
+		if (printJob.printDialog()) {
+		    try {
+			printJob.print();
+		    } catch (Exception ex) {
+			ex.printStackTrace();
+		    }
+		}
+	    }
+
+	    else if (caller.getText().equals("Black/White")) {
+		setBW();
+		caller.setText("Color");
+	    }
+	    else if (caller.getText().equals("Color")) {
+		setColor();
+		caller.setText("Black/White");
+	    }
+	    else if (caller.getText().equals("Close")) {
+		this.setVisible(false);
+	    }
+	    else if (caller.getText().equals("Export to file")) {
+		exportToFile();
+	    }
+	    else if (caller.getText().equals("Log")) {
+		setYLog(true);
+	    }
+	    else if (caller.getText().equals("Linear")) {
+		setYLog(false);
+	    }
+	}
+    }
+
+    /** Implementation of the Printable interface
+     */
+    public int print(Graphics g, PageFormat pf, int pi)
+	throws PrinterException {
+	if (pi >= 1) {
+	    return Printable.NO_SUCH_PAGE;
+	}
+	
+	if (thePlots.length < 1) return Printable.NO_SUCH_PAGE;
+
+	// Check the paper format. Construct a new JPanel with
+	// the correct size and add the plots.
+	double pHeight = pf.getImageableHeight();
+	double pWidth = pf.getImageableWidth();
+
+	System.err.println("Printable height: " + pHeight);
+	System.err.println("Printable width: " + pWidth);
+
+	Graphics2D gg = (Graphics2D) g;
+	double scale = 0.61;
+	double vmargin = pHeight/10;
+	double hmargin = pWidth/6;
+
+	gg.translate(hmargin,1.5*vmargin);
+
+	// Write a heading
+	gg.setPaint(Color.black);
+	Font normalFont = new Font ("SansSerif", Font.PLAIN, 8);
+  	gg.setFont(normalFont);
+	gg.drawString("File: " + getTitle(),0,0);
+
+	gg.translate(0,vmargin);
+	gg.scale(scale,scale);
+
+	// Draw each plots in turn
+	double ploth = (pHeight-3*vmargin)/thePlots.length/scale;
+
+	for (int i=0; i<thePlots.length; i++) {
+	    thePlots[i].paintAll(gg);
+	    gg.translate(0,ploth);
+	}
+	return Printable.PAGE_EXISTS;
+    }
+
+    /** Sets all dataseries to black and white */
+    private void setBW() {
+	for (int i=0; i<thePlots.length; i++) {
+	    thePlots[i].setColor(false);
+	    //String[] styles = new String[] {"none","points","dots"};
+	    //for (int j=0; (j<thePlots[i].getNumDataSets() &&
+	    //j<styles.length) ; j++) 
+	    //thePlots[i].setMarksStyle(styles[j],j);
+	}
+	plotPanel.repaint();
+    }
+    
+    /** Sets all dataseries to color */
+    private void setColor() {
+	for (int i=0; i<thePlots.length; i++) {
+	    thePlots[i].setColor(true);
+	    //for (int j=0; j<thePlots[i].getNumDataSets() ; j++) 
+	    //thePlots[i].setMarksStyle("none",j);
+	}
+	plotPanel.repaint();
+    }
+
+
+    /**
+     * Writes the data in each plot to a file. Assumes that all data 
+     * series have the same length.
+     */
+    private void exportToFile() {
+	//Create a file chooser
+	JFileChooser fc = new JFileChooser();
+	
+	ExtensionFileFilter mfilter = 
+	    new ExtensionFileFilter("txt",
+				    "text files");
+	fc.setFileFilter(mfilter);
+
+	int returnVal = fc.showSaveDialog(this);
+	if (returnVal == JFileChooser.APPROVE_OPTION) {
+	    File file = new File("Unnamed");
+	    try {
+		file = fc.getSelectedFile();
+
+		// Get all the data sets. Determine if all have
+		// the same length
+		boolean samelength = true;
+		int firstlength;
+		int nseries=0;
+		Vector data = new Vector();
+		if ((thePlots.length == 0)  | (thePlots[0] == null)) 
+		    return;
+		else {
+		    firstlength = thePlots[0].getDataset(0).size();
+		    for (int i=0;i<thePlots.length;i++) {
+			for (int series=0; 
+			     series<thePlots[i].getNumDataSets(); series++) {
+			    nseries++;
+			    Vector dataset = thePlots[i].getDataset(series);
+			    if (dataset.size() != firstlength) {
+				samelength = false;
+			    }
+
+			    data.add(dataset);
+			}
+		    }
+		    
+		    if ((this.headers == null) | 
+			(this.headers.length != nseries)) {
+			// Use the legends as headings
+			this.headers = new String[nseries];
+			int untitled = 0;
+			int j = 0;
+			for (int i=0;i<thePlots.length;i++) {
+			    for (int series=0; 
+				 series<thePlots[i].getNumDataSets(); 
+				 series++) {
+				String legend = thePlots[i].getLegend(series);
+				if (legend != null)
+				    legend = "Untitled"+untitled;
+				this.headers[j] = legend;
+				j++;
+			    }
+			}
+
+		    Vector columnTitles = new Vector(nseries);
+		    for (int i=0; i<nseries; i++) 
+			columnTitles.add(this.headers[i]);
+
+		    PrintWriter out = new PrintWriter(
+			      new BufferedWriter(new FileWriter(file)));
+		    if (samelength) 
+			printSeries(out, columnTitles, data);
+		    else {
+			for (int i=0; i<nseries; i++) {
+			    printSeries(out,
+					columnTitles.subList(i,i+1),
+					data.subList(i,i+1));
+			}
+		    }
+		    
+		    out.flush();
+		    out.close();
+		    }
+		}
+	    } catch (IOException ioex) {
+		System.err.println("Unable to write to file:");
+		System.err.println(file.toString());
+	    }
+	}
+    }
+
+
+    private void printSeries(PrintWriter out, java.util.List ctitles,
+			     java.util.List data) throws IOException {
+	//print the headers
+
+	out.print("x\t");
+	for (Iterator it = ctitles.iterator(); it.hasNext();) {
+	    out.print((String) it.next());
+	    out.print("\t");
+	}
+	
+	out.println();
+
+	// Print the data, row-wise
+	// The x value is taken from the first
+	// data series.
+	
+	int rows = ((Vector) data.get(0)).size();
+
+	for (int row=0; row<rows; row++) {
+	    Iterator it = data.iterator();
+	    PlotPoint dp = 
+		(PlotPoint) ((Vector) it.next()).elementAt(row);
+	    out.print(dp.x);
+	    out.print("\t");
+	    out.print(dp.y);
+
+	    while (it.hasNext()) {
+		out.print("\t");
+		dp = 
+		    (PlotPoint) 
+		    ((Vector) it.next()).elementAt(row);
+		out.print(dp.y);
+	    }
+	    out.println();
+	}   
+    }
+
+    public static void main(String args[]) {
+        Plotter aPlotter = new Plotter("Test");
+	DoubleMatrix1D x = KAlgebra.linspace(0.0,13,30);
+	aPlotter.addData(x);
+    }
+}

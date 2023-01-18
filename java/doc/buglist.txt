@@ -1,0 +1,14 @@
+2003-11-14
+
+  Bug 1
+  When defining a new group. If test type is set earlier, then 
+  change to empty does not alter search criterion.
+  Status: Not solved.
+
+  Bug 2
+  When defining a new group. Search with all fields empty gives
+  NullpointerException at HeadMotionDB.java:184
+  
+  Bug 3
+  Changes to a group though clicking the "Edit" button are not saved
+  to the database.

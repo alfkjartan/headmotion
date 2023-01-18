@@ -1,0 +1,360 @@
+/**
+ * Encapsulation of the HeadMotion database. Singleton
+ *
+ * @author  Kjartan Halvorsen
+ * @version 1.0  2003-04-10
+ */
+
+package kha.hm;
+
+import java.util.*;
+import java.sql.*;
+import javax.swing.*;
+import cern.colt.matrix.*;
+import kha.db.*;
+
+
+public class HeadMotionDB extends DB {
+
+    public static String TRIAL_TABLE = "torticollis_trials";
+    public static String DATA_TABLE = "torticollis_data";
+    public static String SUBJECT_TABLE = "torticollis_subjects";
+    public static String GROUP_TABLE = "torticollis_groups";
+
+    public static String[] TRIAL_HEADERS 
+	= new String[] {"trial_ind",
+			"subject_id",
+			"diagnosis",
+			"medication",
+			"medication_start",
+			"phys_therapy",
+			"pt_start",
+			"test_occasion",
+			"test_type",
+			"marker_set",
+			"bandwidth_param",
+			"tsv_timestamp"};
+    public static String[] TRIAL_TYPES 
+	= new String[] {"INTEGER IDENTITY",
+			"INTEGER",
+			"INTEGER",
+			"VARCHAR(64)",
+			"DATE",
+			"VARCHAR(12)",
+			"DATE",
+			"INTEGER",
+			"VARCHAR(64)",
+			"VARCHAR(512)",
+			"FLOAT",
+			"TIMESTAMP"}; //used to check that data are unique 
+			
+    private static HeadMotionDB theDB = null;
+
+    private static String createDataTableSQL = 
+	"CREATE CACHED TABLE " + DATA_TABLE
+	+ " (trial_data_ind INTEGER IDENTITY, " 
+	+ "tsv_timestamp TIMESTAMP, " //used to check that data are unique 
+	+ "tsv_attr OTHER, " 
+	+ "tsv_data OTHER, " 
+	+ "results_data OTHER, "
+	+ "FOREIGN KEY (tsv_timestamp) REFERENCES "
+	+ TRIAL_TABLE
+	+ " (tsv_timestamp))";
+
+    private static String createSubjectTableSQL =
+	"CREATE TABLE " + SUBJECT_TABLE
+	+ " ( subject_id INTEGER IDENTITY, " 
+	+ "firstname VARCHAR(256), "
+	+ "lastname VARCHAR(256), "
+	+ "year_of_birth INTEGER, "
+	+ "gender VARCHAR(6), " 
+	+ "debut_year INTEGER )" ;
+
+    private static String createGroupTableSQL =
+	"CREATE TABLE " + GROUP_TABLE
+	+ " ( group_id INTEGER IDENTITY, " 
+	+ "description VARCHAR(256), "
+	+ "trial_indices OTHER) ";
+
+    private TrialGUI trialFields = null;
+    //    private GroupGUI groupFields = null;
+
+    private HeadMotionDB (String url, String user, String passwd) {
+	super(url,user,passwd);
+
+	createTable(createSubjectTableSQL);
+	createTable(createTrialTableSQL());
+	createTable(createDataTableSQL);
+	createTable(createGroupTableSQL);
+    }
+
+    private static String createTrialTableSQL() {
+	StringBuffer sql = 
+	    new StringBuffer("CREATE TABLE " + TRIAL_TABLE
+			     + " ( ");
+	for (int i=0; i<TRIAL_HEADERS.length; i++) {
+	    sql.append(TRIAL_HEADERS[i] + " " +
+		       TRIAL_TYPES[i] + ", ");
+	}
+	sql.append("UNIQUE (tsv_timestamp), FOREIGN KEY (subject_id) " +
+		   "REFERENCES " + SUBJECT_TABLE + " (subject_id))");
+	
+	return sql.toString();
+    }
+		   
+
+    public static HeadMotionDB getDB(String url, String user, String passwd) {
+	if (theDB == null) {
+	    theDB = new HeadMotionDB(url, user, passwd);
+	}
+	try {
+	    if (theDB.getConnection().isClosed()) {
+		theDB.connect(url, user, passwd);
+	    }
+	} catch (SQLException ex){
+	    theDB.connect(url, user, passwd);
+	}
+	return theDB;
+    }
+
+    /**
+     * Used for testing purposes only
+     */
+    static HeadMotionDB getTestDB() {
+	return new HeadMotionDB("jdbc:hsqldb:hmtestdb", "sa", "");
+    }
+
+
+    public TrialGUI getTrialGUI() {
+	if (trialFields == null) {
+	    trialFields = TrialGUI.getInstance(this);
+	}
+	return trialFields;
+    }
+
+    /**
+     * Deletes a trial from the database. 
+     * @param  timestamp  the unique timestamp of the trial
+     * @return 1 if trial successfully deleted. -1 otherwise
+     */
+    public int deleteTrial(java.sql.Timestamp tstamp) {
+	String cmnd1 = "DELETE FROM " + DATA_TABLE + 
+	    " WHERE tsv_timestamp=?";
+	String cmnd2 = "DELETE FROM " + TRIAL_TABLE + 
+	    " WHERE tsv_timestamp=?";
+	
+	int deleted1 = -1;
+	int deleted2 = -1;
+	
+	try {
+	    PreparedStatement ps1 = this.conn.prepareStatement(cmnd1);
+	    ps1.setTimestamp(1, tstamp);
+	    deleted1 = ps1.executeUpdate();
+	    
+	    if (deleted1 == 1) {
+		System.err.println("Deleted trial " + tstamp +
+				       " from DATA_TABLE");
+		PreparedStatement ps2 = this.conn.prepareStatement(cmnd2);
+		ps2.setTimestamp(1, tstamp);
+		deleted2 = ps2.executeUpdate();
+		if (deleted2 == 1) {
+		    System.err.println("Deleted trial " + tstamp +
+				       " from TRIAL_TABLE");
+				 
+		    this.deleteFromGroups(tstamp);
+		} else { return -1;}
+	    } else {return -1;}
+	} catch (SQLException e) {
+	    System.err.println("Unable to prepare statement");
+	    e.printStackTrace();
+	    return -1;
+	}
+	
+	return 1;
+	
+    }
+
+    /** 
+     * Check all the groups in the Group database, and removes the reference 
+     * to the trial identified with the timestamp
+     * @param  tstamp   timestamp of the trial to delete
+     * @return          1 if ok.
+     */
+    private int deleteFromGroups(java.sql.Timestamp tstamp) {
+	// Get all groups
+	Vector groupsToUpdate = new Vector();
+	try {
+	    ResultSet allGroups = 
+		inquire("SELECT * FROM " + GROUP_TABLE);
+	    while (allGroups.next()) {
+		int id = allGroups.getInt(1);
+		String description = allGroups.getString(2);
+		Vector trials = (Vector) allGroups.getObject(3);
+		if (trials.contains(tstamp)) {
+		    trials.remove(tstamp);
+		    System.err.println("Updating group: " + description);
+		    groupsToUpdate.add(new Group(id,description, 
+						 null, trials));
+		}
+	    }
+	    allGroups.close();
+	} catch(SQLException e) {
+	    System.err.println("SQLException in deleteFromGroups");
+	    e.printStackTrace();
+	    return -1;
+	}
+
+	
+	for (Enumeration enum=groupsToUpdate.elements(); 
+	     enum.hasMoreElements();) {
+	    try {
+		((Group) enum.nextElement()).updateDatabase(this);
+	    } catch(SQLException e) {
+		System.err.println("Unable to update group");
+		e.printStackTrace();
+	    }
+	}
+
+	return groupsToUpdate.size();
+    }
+
+    /**
+     * Writes a Trial object to the database. Requires that the time-stamp
+     * in the tsv data file is unique.
+     * @param  trialfields  the set of fields in the TRIAL_TABLE
+     * @param  datafields  the set of fields in the DATA_TABLE
+     * @return   true if successfull, false if not.
+     */
+     public void saveTrial(Vector trialfields, Vector datafields) 
+    throws SQLException {
+	 updateTable(TRIAL_TABLE, trialfields);
+	 updateTable(DATA_TABLE, datafields);
+     }
+
+    /**
+     * Writes a Trial object to the database. Overwrites if tsv data file 
+     * with same timestamp already exists.
+     * @param  trialfields  the set of fields in the TRIAL_TABLE
+     * @param  datafields  the set of fields in the DATA_TABLE
+     * @return   true if successfull, false if not.
+     */
+     public void saveTrialForced(Vector trialfields, Vector datafields,
+				 Field timestmp) 
+    throws SQLException {
+	 updateTable(TRIAL_TABLE, trialfields, timestmp);
+	 updateTable(DATA_TABLE, datafields, timestmp);
+     }
+
+    /**
+     * Updates the information about a trial in the TRIAL_TABLE. The trial must
+     * exist in the database. This method is mostly used to correct erronous
+     * entries.
+     * @param  trialfields  the set of fields in the TRIAL_TABLE
+     * @return   true if successfull, false if not.
+     */
+     public boolean updateTrial(Vector trialfields, Field timestamp) {
+	 try {
+	     updateTable(TRIAL_TABLE, trialfields, timestamp);
+	     return true;
+	 } catch (SQLException e) {
+	     System.err.println("Unable to save trial in database");
+	     System.err.println(e.getMessage());
+	     e.printStackTrace();
+	     return false;
+	 }
+     }
+
+    /** 
+     * Searches the database for trials using the searchstring. 
+     * @param  searchstr  String with sql search syntax, the part after
+     *                     'SELECT ... FROM ... WHERE'
+     * @return    array of Trial objects. The array has zero length if
+     *            no trials are found.
+     */
+    public Trial[] searchTrials(String searchstr) {
+
+	ResultSet rs = inquire("SELECT * FROM " +
+			       TRIAL_TABLE +
+			       " WHERE " + searchstr);
+
+	Vector trials = new Vector();
+	
+	try {
+	    while(rs.next()) {
+		Trial tr = new Trial();
+		tr.setAttribute(TRIAL_HEADERS[0],
+				new Integer(rs.getInt(1)));
+		tr.setAttribute(TRIAL_HEADERS[1],
+				new Integer(rs.getInt(2)));
+		tr.setAttribute(TRIAL_HEADERS[2],
+				new Integer(rs.getInt(3)));
+		tr.setAttribute(TRIAL_HEADERS[3],rs.getString(4));
+		tr.setAttribute(TRIAL_HEADERS[4],rs.getDate(5));
+		String ptstr = rs.getString(6);
+		tr.setAttribute(TRIAL_HEADERS[5],
+				new Boolean(ptstr.equals("yes")));
+		tr.setAttribute(TRIAL_HEADERS[6],rs.getDate(7));
+		tr.setAttribute(TRIAL_HEADERS[7],
+				new Integer(rs.getInt(8)));
+		tr.setAttribute(TRIAL_HEADERS[8],rs.getString(9));
+		tr.setAttribute(TRIAL_HEADERS[9],rs.getString(10));
+		tr.setAttribute(TRIAL_HEADERS[10],
+				new Double(rs.getDouble(11)));
+		tr.setAttribute(TRIAL_HEADERS[11],rs.getTimestamp(12));
+		
+		tr.setDatabase(this);
+
+		trials.add(tr);
+	    }
+	} catch (SQLException ex) { 
+	    System.err.println("SQLException when " +
+			       "constructing Trial" +
+			       " object. ");
+	    System.err.println(ex.getMessage());
+	}
+	
+	Trial[] trs = new Trial[trials.size()];
+	trials.toArray(trs);
+	return trs;
+    }
+	
+    
+    public TrialData getTrialData(java.sql.Timestamp timestamp) {
+	return getTrialData(timestamp.toString());
+    }
+
+    public TrialData getTrialData(String timestamp) {
+	String sqlquery = "SELECT * FROM " + DATA_TABLE +
+	    " WHERE tsv_timestamp='" + timestamp + "'";
+	ResultSet rs = inquire(sqlquery);
+	TrialData td = null;
+	try {
+	    if (rs.next()) {
+		td = new TrialData((Hashtable) rs.getObject(3),
+				   (DoubleMatrix2D) rs.getObject(4),
+				   (DoubleMatrix2D) rs.getObject(5));
+	    }
+	} catch (SQLException e) {
+	    System.err.println("SQLException when " +
+			       "retreiving data for trial " +
+			       timestamp);
+	    System.err.println(e.getMessage());
+	}
+	return td;
+    }
+
+		
+
+    /*
+    public Vector getGroupFields() {
+	if (groupFields == null) {
+	    groupFields = createGroupFields();
+	}
+	return groupFields;
+    }
+    */
+
+}
+
+
+

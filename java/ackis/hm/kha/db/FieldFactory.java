@@ -1,0 +1,767 @@
+/**
+ * This class is a Factory which produces database Fields of different 
+ * kinds. 
+ * 
+ * @author   Kjartan Halvorsen
+ * @version 1.1  2003-04-23,   1.0  2003-02-24
+ */
+
+package kha.db;
+
+import java.sql.*;
+import java.util.*;
+import javax.swing.*;
+import java.awt.*;
+import java.awt.event.*;
+import java.text.SimpleDateFormat;
+import java.text.NumberFormat;
+import java.text.ParseException;
+import java.io.PrintStream;
+
+public class FieldFactory {
+
+    public final static FieldFactory FF = new FieldFactory();
+    public final static int INT = 0;
+    public final static int STRING = 1; // Maps to VARCHAR
+    public final static int FLOAT = 2;
+    public final static int DATE = 3;
+    public final static int YESNO = 4;
+ 
+    static PrintStream out = System.out;
+    
+    private FieldFactory(){}
+
+    public Field createOtherField(String heading) {
+	return new OtherField(heading);
+    }
+
+    public Field createTimestampField(String heading) {
+	Field tsf =  new TimestampField(heading);
+	return tsf;
+    }
+
+    public Field createTimestampField(String heading, String name) {
+	Field tsf =  new TimestampField(heading,name);
+	return tsf;
+    }
+
+    public Field createYesNoField(String heading, String name,
+				  boolean searchable) {
+	return new YesNoField(searchable,heading,name);
+    }
+
+    public Field createField(int type, String heading,
+			     String name, boolean mutable,
+			     boolean searchable,ResultSet rs) {
+	if (rs == null) {
+	    return createField(type,heading,name,mutable,searchable);
+	}
+
+	switch (type) {
+	case INT: 
+	    return new IntegerField(mutable,searchable,
+				    heading,name,rs,
+				    VerifierFactory.isInt());
+	case STRING: return new StringField(mutable,searchable,
+					    heading,name,rs);
+	case FLOAT: return new FloatField(mutable,searchable,
+					  heading,name,rs,
+				    VerifierFactory.isFloat());
+	case DATE: return new DateField(mutable,searchable,
+					heading,name,rs);
+	default: return null;
+	}
+    }
+
+    public Field createField(int type, String heading,
+			     String name, boolean mutable,
+			     boolean searchable) {
+	Vector objs = new Vector();
+	return createField(type,heading,name,mutable,searchable,objs);
+    }
+
+    public Field createField(int type, String heading,
+			     String name, boolean mutable,
+			     boolean searchable,Vector objs) {
+	switch (type) {
+	case INT: return new IntegerField(mutable,searchable,
+					  heading,name,objs,
+					  VerifierFactory.isInt());
+	case STRING: return new StringField(mutable,searchable,
+					    heading,name,objs);
+	case FLOAT: return new FloatField(mutable,searchable,
+					  heading,name,objs,
+					  VerifierFactory.isFloat());
+	case DATE: return new DateField(mutable,searchable,
+					heading,name,objs);
+	default: return null;
+	}
+    }
+}
+
+
+/** Representation of an OTHER field
+ */
+class OtherField extends AbstractField {
+    
+    public OtherField(String heading) {
+	super(false,false,heading,heading);
+    }
+
+    public void writeValue(PreparedStatement st, int pos)
+	throws SQLException {
+	st.setObject(pos,this.currentValue);
+    }
+}
+
+/** Representation of a Timestamp field
+ */
+class TimestampField extends AbstractField {
+    
+    private JLabel label;
+
+    private Vector views = new Vector();
+
+    private final TimestampDocument fromDate = 
+	new TimestampDocument("1900-01-01"); 
+    private final TimestampDocument toDate = 
+	new TimestampDocument("2010-12-31"); 
+
+    public TimestampField(String heading) {
+	super(false,false,heading,heading);
+	this.label = null;
+    }
+
+    public TimestampField(String heading, String name ) {
+	super(false,false,heading,name);
+	this.label = new JLabel();
+    }
+
+    public Component getAddGUI() {
+	return label;
+    }
+
+    public Component getSearchGUI() {
+	JPanel sp = new JPanel();
+	sp.setLayout(new BoxLayout(sp, BoxLayout.X_AXIS));
+	JLabel startDescr = new JLabel("from:");
+	JLabel endDescr = new JLabel("to:");
+	JTextField searchStartField = 
+	    new JTextField(fromDate, fromDate.getText(),10);
+	JTextField searchEndField = 
+	    new JTextField(toDate, toDate.getText(),10);
+
+	sp.add(startDescr);
+	sp.add(searchStartField);
+	sp.add(endDescr);
+	sp.add(searchEndField);
+	
+	return sp;
+    }
+
+    private class TimestampDocument extends javax.swing.text.PlainDocument {
+	public TimestampDocument(String s) {
+	    super();
+	    setText(s);
+	}
+
+	public String getText() {
+	    try {
+		return super.getText(0,10);
+	    } catch(javax.swing.text.BadLocationException be) {
+		return "";
+	    }
+	}
+
+	public void setText(String s) {
+	    try {
+		remove(0,10);
+	    } catch(javax.swing.text.BadLocationException be) {}
+	    try {
+		insertString(0, s, null);
+	    } catch(javax.swing.text.BadLocationException be) {}
+	}
+    }
+
+    public String getSQLSearchString() {
+	String fromstr = this.fromDate.getText();
+	String tostr = this.toDate.getText();
+
+	try { // to parse as date
+	    java.sql.Date fromdt = java.sql.Date.valueOf(fromstr);
+	} catch(IllegalArgumentException e) {
+	    fromstr = "1900-01-01";
+	    this.fromDate.setText(fromstr);
+	}
+	try { // to parse as date
+	    java.sql.Date todt = java.sql.Date.valueOf(tostr);
+	} catch(IllegalArgumentException e) {
+	    tostr = "2010-12-12";
+	    this.toDate.setText(tostr);
+	}
+	
+	return (this.heading + " BETWEEN '" + fromstr + "' AND '" + tostr + "'"); 
+    }
+
+    public void setValue(Object o) {
+	if (o == null) {
+	    this.currentValue = o;
+	    if (this.label != null)
+		this.label.setText("");
+	}
+	else if (o instanceof java.sql.Timestamp) {
+	    this.currentValue = o;
+	    if (this.label != null)
+		this.label.setText(o.toString());
+	}
+    }
+
+    public void writeValue(PreparedStatement st, int pos)
+	throws SQLException {
+	st.setTimestamp(pos,(java.sql.Timestamp) this.currentValue);
+    }
+}
+
+
+
+/**
+ * Super class for all more specific classes that use a ComboBox
+ * for the GUIs.
+ */
+abstract class ComboField extends AbstractField {
+
+    protected JComboBox vlist;
+    protected Component searchlist = null;
+
+    public ComboField(boolean mutable, boolean searchable,
+		      String heading, String name) {
+	
+	super(mutable, searchable, heading,name);
+    }
+
+    protected JComboBox createGUI(Vector objs) {
+	return createGUI(objs,this.mutable);
+    }
+
+    protected JComboBox createGUI(Vector objs, boolean mute) {
+	JComboBox cb = new JComboBox(objs);
+	cb.setEditable(mute);
+	return cb;
+    }
+
+    public Component getAddGUI() {
+	return vlist;
+    }
+
+    public Component getSearchGUI() {
+	return searchlist;
+    }
+
+    public Object getValue(){
+	return vlist.getSelectedItem();
+    }
+
+    public synchronized void setValue(Object o) {
+	if (verify(o)) {
+	    // Check if unique
+	    boolean unique = true;
+	    int i=0;
+	    for (i=0; i<vlist.getItemCount(); i++) {
+		if (o.equals(vlist.getItemAt(i))) {
+		    unique = false;
+		    break;
+		}
+	    }
+	    if (mutable && unique) {
+		this.currentValue = o;
+		// add to the list
+		vlist.addItem(o);
+		vlist.setSelectedItem(o);
+		System.err.println("Added object " + o);
+	    }
+	    else if (!unique) {
+		this.currentValue = o;
+		vlist.setSelectedIndex(i);
+		System.err.println("Set selected index to " + i);
+		System.err.println("Itemcount " + vlist.getItemCount());
+	    }
+	}
+    }
+}
+
+class StringField extends ComboField implements ItemListener{
+
+    private String searchstring="";;
+
+    public StringField(boolean mutable, boolean searchable,
+		       String heading, String name) {
+	super(mutable, searchable, heading, name);
+	
+	this.objs = new Vector();
+	this.vlist = createGUI(this.objs);
+    }
+
+    public StringField(boolean mutable, boolean searchable,
+		       String heading,String name, ResultSet rs) {
+	super(mutable, searchable, heading, name);
+
+	this.objs=queryResultSet(rs);
+
+	// Create the add gui
+	this.vlist = createGUI(this.objs);
+
+    }
+
+    public StringField(boolean mutable, boolean searchable,
+		       String heading, String name, Vector objs) {
+	super(mutable, searchable, heading,name);
+
+	this.objs=objs;
+
+	// Create the gui
+	this.vlist = createGUI(this.objs);
+
+    }
+
+    public void writeValue(PreparedStatement st, int pos) 
+	throws SQLException
+    {
+	if (!(vlist == null)) {
+	    st.setString(pos,vlist.getSelectedItem().toString());
+	}
+    }
+
+    public Component getSearchGUI() {
+	JComboBox sbox = null;
+	if (searchable) {
+	    Vector alternatives = (Vector) this.objs.clone();
+	    alternatives.add(0,"");
+	    sbox = createGUI(alternatives);
+	    sbox.addItemListener(this);
+	}
+	return sbox;
+    }
+
+    public void itemStateChanged(ItemEvent ev) {
+	this.searchstring = (String) ev.getItem();
+    }
+	
+     
+    public String getSQLSearchString() {
+	if (searchable) {
+	    if (searchstring.length()>0) {
+		sqlsearchstring =  this.heading + 
+		    " = '" + searchstring + "'";
+	    }
+	}
+	return sqlsearchstring;
+    }
+    
+}
+
+abstract class NumberField extends AbstractField {
+
+    private JTextField textf;
+
+    public String searchstring = "";
+
+    public NumberField (boolean mutable, boolean searchable,
+			String heading, String name, 
+			ResultSet rs, Verifier v) {
+	super(mutable, searchable, heading,name);
+
+	this.vf = v;
+
+	// Create the gui
+	this.textf = createGUI();
+
+    }
+
+    public NumberField(boolean mutable, boolean searchable,
+		       String heading, String name, 
+		       Vector objs, Verifier v) {
+	
+	super(mutable, searchable, heading,name);
+
+	this.vf = v;
+
+	// Create the gui
+	this.textf = createGUI();
+    }
+
+    private JTextField createGUI() {
+	JTextField tf = new JTextField(10);
+	UpdateMe um = new UpdateMe(this.vf);
+	tf.addActionListener(um);
+	return tf;
+    }
+
+    public Component getSearchGUI() {
+	if (searchable) {
+	    JTextField tf =  new JTextField(10);
+	    UpdateMe um = new UpdateMe(this);
+
+	    tf.setInputVerifier(um);
+	    tf.addActionListener(um);
+	    return tf;
+	} else 
+	    return null;
+    }
+    
+
+    public Component getAddGUI() {
+	return this.textf;
+    }
+
+    public void setValue(Object o) {
+	System.err.println("Setting value: " + o);
+	if (this.vf.isOK(o)) { 
+	    this.textf.setText(o.toString());
+	    System.err.println("Set value: " + o);
+	} else
+	    System.err.println("Not valid value: " + o);
+    }
+
+    public Object getValue() {
+	String val =  this.textf.getText();
+	if (!this.vf.isOK(val)) {
+	    this.textf.setText("");
+	    val = "";
+	}
+	return val;
+    }
+
+    public String getSQLSearchString() {
+	if (searchable && (this.searchstring != null) &&
+	    (this.searchstring.length()>0)) 
+	    return parseSearchString(this.searchstring);
+	else
+	    return "";
+
+    }
+
+
+    private String parseSearchString(String s) {
+	String sqlsearchstring = "";
+	boolean ok = false;
+	String delim = "=><";
+	StringTokenizer tok = new StringTokenizer(s, delim, true);
+	try {
+	    String oper = tok.nextToken();
+	    String value = tok.nextToken();
+	    
+	    if ((delim.indexOf(oper) > -1) &&
+		this.vf.isOK(value)) {
+
+		sqlsearchstring =  this.heading +
+		    " " + oper + " " + value;
+		ok = true;
+	    }
+	} catch (NoSuchElementException exc) {
+	    FieldFactory.out.println("Unable to parse search text for " +
+				     this.name + ".\n Example of valid " +
+				     "strings:\n >1 \n =3\n <4");
+	}
+	return sqlsearchstring;
+    }
+
+    /** Private inner class which is used with the search JTextField
+     * object to set the searchstring of this field
+     */
+    class UpdateMe extends InputVerifier implements ActionListener {
+
+	private NumberField nf;
+	private Verifier verifier;
+
+	public UpdateMe(Verifier v) {
+	    this(null, v);
+	}
+
+	public UpdateMe(NumberField n) {
+	    this(n, VerifierFactory.alwaysOK());
+	}
+
+	public UpdateMe(NumberField n, Verifier v) {
+	    this.nf = n;
+	    this.verifier = v;
+	}
+
+	public boolean verify(JComponent input) {
+	    JTextField tf = (JTextField) input;
+	    String text = tf.getText();
+	    if (verifier.isOK(text)) {
+		if (this.nf != null)
+		    this.nf.searchstring = text;
+	    } else
+		tf.setText("");
+	    
+	    return true;
+	}
+
+	public void actionPerformed(ActionEvent ev) {
+	    verify((JTextField) ev.getSource());
+	}
+    }
+}
+
+class IntegerField extends NumberField {
+
+    public IntegerField(boolean mutable, boolean searchable,
+			String heading, String name, ResultSet rs,
+			Verifier v) {
+	super(mutable,searchable,heading,name,rs,v);
+    }
+
+    public IntegerField(boolean mutable, boolean searchable,
+			String heading, String name, Vector objs,
+			Verifier v) {
+	super(mutable,searchable,heading,name,objs,v);
+    }
+
+    public Object getValue() {
+	String v = (String) super.getValue();
+	if (v.length() == 0)
+	    return new Integer(-1);
+	else
+	    return new Integer(v);
+    }
+
+    public void writeValue(PreparedStatement st, int pos) 
+	throws SQLException{
+	int value = ((Integer) getValue()).intValue();
+	st.setInt(pos,value);
+    }
+
+
+}
+
+
+class FloatField extends NumberField {
+    
+
+    public FloatField(boolean mutable, boolean searchable,
+		      String heading, String name, ResultSet rs,
+		      Verifier v) {
+	super(mutable,searchable,heading,name,rs,v);
+    }
+
+    public FloatField(boolean mutable, boolean searchable,
+		      String heading, String name, Vector objs,
+		      Verifier v) {
+	super(mutable,searchable,heading,name,objs,v);
+    }
+
+
+    public Object getValue() {
+	String v = (String) super.getValue();
+	if (v.length() == 0)
+	    return new Double(1.0);
+	else
+	    return new Double(v);
+    }
+
+    public void writeValue(PreparedStatement st, int pos) 
+	throws SQLException{
+	double value = ((Double) getValue()).doubleValue();
+	st.setDouble(pos,value);
+	
+    }
+}
+
+
+class DateField extends ComboField implements ActionListener,
+					      ItemListener {
+    
+
+    public DateField(boolean mutable, boolean searchable,
+		     String heading, String name, ResultSet rs) {
+	super(mutable, searchable, heading,name);
+
+	this.objs = queryResultSet(rs);
+	
+	this.validate(this.objs);
+
+	if (this.objs.size()>0)
+	    this.currentValue = this.objs.elementAt(0);
+
+	// Create the gui
+	vlist = createGUI(this.objs);
+    }
+
+    public DateField(boolean mutable, boolean searchable, 
+		     String heading, String name, Vector objs) {
+	super(mutable, searchable, heading,name);
+
+	this.objs = objs;
+	this.validate(this.objs);
+
+	if (this.objs.size()>0)
+	    this.currentValue = this.objs.elementAt(0);
+
+	// Create the gui
+	vlist = createGUI(this.objs);
+    }
+
+    private void validate(Vector objs) {
+	// Validate the objects before accepting them, excluding
+	// objects that do no represent integers.
+	
+	if (objs.isEmpty()) { // Default to today's date
+	    objs.add(new java.sql.Date(System.currentTimeMillis()));
+	} else {
+
+	    Vector ocopy= (Vector) objs.clone();
+	    for (Enumeration en=ocopy.elements(); en.hasMoreElements();) {
+		Object o = en.nextElement();
+		objs.remove(o);
+		try {
+		    java.sql.Date test = java.sql.Date.valueOf(o.toString());
+		    objs.addElement(test);
+		} catch (Exception e) {
+		}
+	    }
+	}
+    }
+
+    public Component getAddGUI() {
+	vlist.addActionListener(this);
+	vlist.addItemListener(this);
+	return super.getAddGUI();
+    }
+
+    public Component getSearchGUI() {
+	//	this.searchlist.addActionListener(this);
+	//	return super.getSearchGUI();
+	return null;
+    }
+
+    public Object getValue(){
+	return this.currentValue;
+    }
+
+    public synchronized void setValue(Object o) {
+	if (o instanceof String) {
+	    java.sql.Date date = parseDate((String) o);
+	    if (date != null) {
+		this.currentValue = date;
+		addIfUnique(date);
+	    }
+	} else if (o instanceof java.sql.Date)
+	    addIfUnique((java.sql.Date) o);
+    }
+
+    public void writeValue(PreparedStatement st, int pos) 
+	throws SQLException{
+	java.sql.Date date;
+	if (this.vlist.getItemCount()>0)
+	    date = (java.sql.Date) vlist.getSelectedItem();
+	else
+	    date = java.sql.Date.valueOf("0001-01-01");
+	st.setDate(pos,date);
+    }
+
+    public void actionPerformed(ActionEvent e) {
+	if (this.mutable) {
+	    JComboBox cb = (JComboBox)e.getSource();
+	    Object o = cb.getSelectedItem();
+	    java.sql.Date date = parseDate(o.toString());
+	    cb.removeItem(o);
+	    if (date != null) {
+		this.currentValue = date;
+		cb.addItem(date);
+		cb.setSelectedItem(date);
+	    } 
+	}
+    }
+
+    public void itemStateChanged(ItemEvent ev) {
+	if (ev.getStateChange() == ItemEvent.SELECTED) {
+	    this.currentValue = ev.getItem();
+	}
+    }
+
+    /**
+     * Tries to parse a string. If not a valid java.sql.Date object, then
+     * null is returned.
+     */
+    private java.sql.Date parseDate(String s) {
+	try {
+	    return java.sql.Date.valueOf(s);
+	} catch (IllegalArgumentException ex) {
+	    return null;
+	}
+    }
+
+    /**
+     * Adds a Date object to the list, and sets the current value.
+     * The object is added to the list only if it is unique.
+     */
+    private synchronized void addIfUnique(java.sql.Date date) {
+	boolean unique=true;
+	
+	for (int i=0; i<this.vlist.getItemCount(); i++) {
+	    if (date.equals((java.sql.Date) this.vlist.getItemAt(i))) { 
+		unique = false;
+		break;
+	    }
+	}
+	    
+	if (unique) { // update the list
+	    this.vlist.insertItemAt(date,0);
+	}
+    }
+}
+
+
+class YesNoField extends StringField {
+    
+    private String searchstring="";;
+
+    public YesNoField(boolean searchable,
+		       String heading, String name) {
+	super(false, searchable, heading, name);
+	
+	this.vlist.addItem("Yes");
+	this.vlist.addItem("No");
+	
+	this.currentValue = "No";
+	this.vlist.setSelectedItem("No");
+    }
+
+
+    public void itemStateChanged(ItemEvent ev) {
+	if (ev.getStateChange() == ItemEvent.SELECTED) {
+	    if (ev.getItemSelectable() == this.vlist) 
+		this.currentValue = ev.getItem();
+	    else 
+		this.searchstring = ev.getItem().toString();
+	}		    
+    }
+	
+     
+    public String getSQLSearchString() {
+	if (searchable) {
+	    if (searchstring.length()>0) {
+		sqlsearchstring =  this.heading + 
+		    " = '" + searchstring + "'";
+	    }
+	}
+	return sqlsearchstring;
+    }
+    
+    public void setValue(Object o) {
+	if (o instanceof Boolean) {
+	    if (((Boolean) o).booleanValue())
+		super.setValue("Yes");	
+	    else
+		super.setValue("No");	
+	} else if (o instanceof String) {
+	    if (((String) o).equalsIgnoreCase("yes"))
+		super.setValue("Yes");	
+	    else if (((String) o).equalsIgnoreCase("no"))
+		super.setValue("No");	
+	}
+    }
+}
+
+

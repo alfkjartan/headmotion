@@ -1,0 +1,764 @@
+/**
+ * GUI for adding new subjects.
+ * @author   Kjartan Halvorsen
+ * @version  1.0  2003-04-09
+ *
+ * Revisions
+ * 2006-09-28  Changed the class to be able to also search, update and delete 
+ *             subjects from the database. 
+*/
+
+package kha.hm;
+
+import java.util.*;
+import java.sql.*;
+import javax.swing.*;
+import java.awt.*;
+import java.awt.event.*;
+
+import kha.db.*;
+
+public class SubjectChooser implements ActionListener, Field {
+
+    static private SubjectChooser theInstance;
+
+    private DefaultComboBoxModel subjectBoxModel;
+
+    private Subject subjectToSearchFor;
+
+    private HeadMotionDB database;
+    private String table;
+    private JDialog newdialog = null;
+
+    private SubjectChooser(HeadMotionDB db) {
+
+	this.database = db;
+	this.table = HeadMotionDB.SUBJECT_TABLE;
+
+	// Try to get the subject names from the database
+	Vector subjects = new Vector();
+	subjects.add(new Subject()); // Empty name at start of list
+	queryDb(subjects);
+
+	this.subjectBoxModel = new DefaultComboBoxModel(subjects);
+
+    }
+
+    public Component getAddGUI() {
+	return getSearchGUI();
+    }
+
+    public Component getSearchGUI() {
+	JPanel mp = new JPanel();
+
+	JComboBox subjbox = new JComboBox(this.subjectBoxModel);
+	subjbox.setEditable(false);
+
+	// Create a button
+	JButton newbtn = new JButton("Add/search subject");
+	newbtn.addActionListener(this);
+	
+	// Create the GUI
+	mp.setLayout(new BoxLayout(mp,BoxLayout.X_AXIS));
+	mp.add(subjbox);
+	mp.add(newbtn);
+	//selectGUI.setBorder(BorderFactory.createEmptyBorder(10,10,10,10));
+	
+	return mp;
+    }
+
+    private void queryDb(Vector subjects) {
+	// Try to get the subject names from the database
+	//String query = "SELECT subject_id, firstname, lastname FROM " 
+	//    + this.table;
+	String query = "SELECT subject_id, firstname, lastname, gender FROM " 
+	    + this.table;
+	ResultSet rs = this.database.inquire(query);
+	if (rs != null) {
+	    subjects.removeAllElements();
+	    try {
+		while ( rs.next() )
+		    subjects.add(0,
+				 new Subject(rs.getInt(1),
+					     rs.getString(2),
+					     rs.getString(3),
+					     rs.getString(4)));
+	    } catch (SQLException ee) {
+		System.err.println("SQLException.");
+		System.err.println(ee.getMessage());
+		ee.printStackTrace();
+	    }
+	}
+    }
+
+
+    public static SubjectChooser getInstance(HeadMotionDB db) {
+	if (theInstance == null) {
+	    theInstance = new SubjectChooser(db);
+	}
+	return theInstance;
+    }
+
+
+    public void writeValue(PreparedStatement st, int pos)
+	throws SQLException {
+	
+	st.setInt(pos, getSubjectId());
+    }
+  
+    private int getSubjectId() {
+	Object sel_obj = subjectBoxModel.getSelectedItem();
+	if (sel_obj == null) return -1;
+	else return ((Subject) sel_obj).getID();
+    }
+
+    private int getSearchSubjectId() {
+	if (this.subjectToSearchFor == null) return -1;
+	else return subjectToSearchFor.getID();
+    }
+
+
+    public String getSQLSearchString(){ 
+	int id = getSubjectId();
+	if (id < 0) {
+	    return "";
+	}
+	return getHeading() + "=" + id;
+    }
+
+
+    public String getName() { return "Subject ";}
+
+    public String getHeading() {return "subject_id";}
+
+    public Object getValue() {return new Integer(getSubjectId());}
+
+    public void setValue(Object o){
+	// The value represented by o must already exist.
+	int oi = ((Integer) o).intValue();
+
+	int i=0;
+	for (i=0; i<subjectBoxModel.getSize(); i++) {
+	    Subject s = (Subject) subjectBoxModel.getElementAt(i); 
+	    if (oi == s.getID()) {
+		subjectBoxModel.setSelectedItem(s);
+		return;
+	    }
+	}
+    }
+
+    public boolean verify() {return (getSubjectId() > -1);}
+    
+    public void setVerifier(Verifier v) {}
+    
+    public void setNonVerifying(){}
+
+    // Implementation of the ActionListener interface
+
+    public void actionPerformed(ActionEvent ev) {
+	// The user wants to create a new subject.
+	// Launch a modal dialog, create if not existing
+	//System.err.println("User pressed Add/search subject button");
+
+	if (this.newdialog == null) {
+	    this.newdialog = new SubjectDialog(this);
+	}
+	this.newdialog.pack();
+	this.newdialog.show();
+    }
+
+    public void setSelectedSubject(int id) {
+	for (int i=0; i<subjectBoxModel.getSize(); i++) {
+	    Subject s = (Subject) subjectBoxModel.getElementAt(i); 
+	    if (id == s.getID()) {
+		subjectBoxModel.setSelectedItem(s);
+		return;
+	    }
+	}
+    }
+
+    /**
+     * Called by SubjectDialog to add new subjects to the database and to the
+     * combolist of subjects in the trial and search tabs.
+     */
+    public void addNewSubject(String firstname, String lastname, 
+			      int year_of_birth, String gender,
+			      int first_diagnosed) {
+	// Check first if another subject with the same name exists. 
+	final String fullname = firstname.trim() + " " + lastname.trim();
+	boolean unique = true;
+	for (int i=0; i<subjectBoxModel.getSize(); i++) {
+	    if (fullname.equalsIgnoreCase(
+		  subjectBoxModel.getElementAt(i).toString())) unique=false;
+	}
+
+	if (!unique) {
+	    Object[] options = {"Yes","Cancel"};
+	    int answer = JOptionPane.showOptionDialog(null,
+			      "Subject exists with identical name. Continue?",
+			      "Subject exisiting",
+			      JOptionPane.YES_NO_OPTION,
+			      JOptionPane.QUESTION_MESSAGE,
+			      null,
+			      options,
+			      options[1]);
+	    if (answer == JOptionPane.NO_OPTION) return;
+	}
+
+	
+	String sqls = "INSERT INTO " + this.table
+	    + " (subject_id, "
+	    + "firstname, " 
+	    + "lastname, " 
+	    + "year_of_birth, " 
+	    + "gender, " 
+	    + "debut_year) " 
+	    + "VALUES (?,?,?,?,?,?)";
+
+	try {
+	    PreparedStatement ps = 
+		this.database.getConnection().prepareStatement(sqls);
+
+	    // Set the new data
+	    ps.setString(2,firstname.trim());
+	    ps.setString(3,lastname.trim());
+	    ps.setInt(4,year_of_birth);
+	    ps.setString(5,gender);
+	    ps.setInt(6,first_diagnosed);
+
+	    //Commit
+	    int i = -1;
+	    i=ps.executeUpdate();
+	    if (i == -1) {
+		System.out.println("db error : " + sqls);
+	    }
+	    
+	    ps.close();
+
+	    // Update the list
+	    Vector subjects = new Vector();
+	    queryDb(subjects);
+	    this.subjectBoxModel.removeAllElements();
+	    this.subjectBoxModel.addElement(new Subject());
+	    for (Enumeration en = subjects.elements(); en.hasMoreElements();)
+		{
+		    this.subjectBoxModel.addElement(en.nextElement());
+		}
+	} catch (SQLException exc) {
+	    System.err.println("Unable to update subject database");
+	    System.err.println(exc.getMessage());
+	}
+    }
+
+  /**
+     * Called by SubjectDialog to edit an existing subject in the database
+     */
+    public void updateSubject(int id, String firstname, String lastname, 
+			      int year_of_birth, String gender,
+			      int first_diagnosed) {
+	
+	String sqls = "UPDATE " + this.table
+	    + " SET firstname = ? , " 
+	    + "lastname = ? , " 
+	    + "year_of_birth = ? , " 
+	    + "gender = ? , " 
+	    + "debut_year = ? " 
+	    + "WHERE subject_id = ?";
+
+	System.err.println("SubjectChooser.updateSubject: SQL: " + sqls);
+
+	try {
+	    PreparedStatement ps = 
+		this.database.getConnection().prepareStatement(sqls);
+
+	    // Set the new data
+	    ps.setString(1,firstname.trim());
+	    ps.setString(2,lastname.trim());
+	    ps.setInt(3,year_of_birth);
+	    ps.setString(4,gender);
+	    ps.setInt(5,first_diagnosed);
+	    ps.setInt(6,id);
+
+	    //Commit
+	    int i = -1;
+	    i=ps.executeUpdate();
+	    if (i == -1) {
+		System.out.println("db error : " + sqls);
+	    }
+	    
+	    ps.close();
+
+	    // Update the list
+	    Vector subjects = new Vector();
+	    queryDb(subjects);
+	    this.subjectBoxModel.removeAllElements();
+	    this.subjectBoxModel.addElement(new Subject());
+	    for (Enumeration en = subjects.elements(); en.hasMoreElements();)
+		{
+		    this.subjectBoxModel.addElement(en.nextElement());
+		}
+	} catch (SQLException exc) {
+	    System.err.println("Unable to update subject database");
+	    System.err.println(exc.getMessage());
+	}
+    }
+
+    /**
+     * Called by SubjectDialog to search for subjects in the database 
+     */
+    public Vector searchSubject(String firstname, String lastname, 
+			      String year_of_birth, String gender,
+			      String first_diagnosed) {
+	StringBuffer sqls = new StringBuffer("SELECT * FROM " + this.table  
+					     + " WHERE ");
+
+	/*
+	  "subject_id, "
+	  + "firstname, "  
+	  + "lastname, " 
+	  + "year_of_birth, " 
+	  + "gender, " 
+	  + "debut_year " 
+	  + "FROM " this.table */
+
+	boolean addAnd = false;
+
+	if (firstname.length() > 0) {
+	    sqls.append("firstname LIKE '" + firstname + "' ");
+	    addAnd = true;
+	}
+	if (lastname.length() > 0) {
+	    if (addAnd) sqls.append("AND ");
+	    sqls.append("lastname LIKE '" + firstname + "' ");
+	    addAnd = true;
+	}
+
+	if (year_of_birth.length() > 3) {
+	    if (year_of_birth.length() == 4) {
+		if (addAnd) sqls.append("AND ");
+		sqls.append("year_of_birth=" + year_of_birth + " ");
+		addAnd = true;
+	    } else { //Assume > or < or = followed by year
+		if (addAnd) sqls.append("AND ");
+		sqls.append("year_of_birth" + year_of_birth + " ");
+		addAnd = true;
+	    }
+	}
+	
+	if (addAnd) sqls.append("AND ");
+	sqls.append("gender='" + gender + "' ");
+
+	if (first_diagnosed.length() > 3) {
+	    if (first_diagnosed.length() == 4) {
+		if (addAnd) sqls.append("AND ");
+		sqls.append("debut_year=" + first_diagnosed + " ");
+	    } else { //Assume > or < or = followed by year
+		if (addAnd) sqls.append("AND ");
+		sqls.append("debut_year" + first_diagnosed + " ");
+	    }
+	}
+	
+	System.err.println("SubjectChooser.searchSubject: SQL: " + sqls);
+
+	ResultSet rs = this.database.inquire(sqls.toString());
+	Vector subjs = new Vector();
+	if (rs != null) {
+	    try {
+		while (rs.next()) {
+		    subjs.add(0, new Subject(rs.getInt(1), rs.getString(2), 
+					     rs.getString(3),
+					     rs.getInt(4),
+					     rs.getString(5),
+					     rs.getInt(6)));
+		}
+	    } catch (SQLException ee) {
+		System.err.println("SQLException.");
+		System.err.println(ee.getMessage());
+		ee.printStackTrace();
+	    }
+	}
+	return subjs;
+    }
+
+}
+
+class SubjectDialog extends JDialog {
+    
+    private SubjectChooser subjch;
+
+    final JTextField idField = new JTextField(4);  
+    final JTextField fnameField = new JTextField(10);
+    final JTextField lnameField = new JTextField(10);
+    final JTextField byField = new JTextField(10);
+    final JComboBox gField = 
+	new JComboBox(new String[] {"male","female"});
+    final JTextField dField = new JTextField(10);
+
+    private JOptionPane optionPane;
+
+    final JList sfList = new JList();
+    private Vector subjects = new Vector();
+    
+    public SubjectDialog(SubjectChooser sc) {
+        super();
+	this.subjch = sc;
+
+        setTitle("Add/Edit new subject");
+
+	gField.setEditable(false);
+
+        final String qString0 = "ID:";
+        final String qString1 = "First name:";
+        final String qString2 = "Last name:";
+        final String qString3 = "Birth year:";
+        final String qString4 = "Gender:";
+        final String qString5 = "First diagnosed (year):";
+
+	idField.setEditable(false);
+
+	JPanel process = new JPanel();
+	process.setLayout(new BorderLayout());
+
+	JPanel fieldp = new JPanel();
+	GridBagLayout gridb = new GridBagLayout();
+	GridBagConstraints gbc = new GridBagConstraints();
+	fieldp.setLayout(gridb);
+	
+	gbc.weightx = 0.5;
+	gbc.fill = GridBagConstraints.HORIZONTAL; 
+
+	gbc.gridy = 0;
+	gbc.gridx = 0;
+	JLabel descr = new JLabel(qString0,JLabel.TRAILING);
+	gridb.setConstraints(descr,gbc);
+	fieldp.add(descr);
+	gbc.gridx = 1;
+	gridb.setConstraints(idField,gbc);
+	fieldp.add(idField);
+
+	gbc.gridy = 1;
+	gbc.gridx = 0;
+	descr = new JLabel(qString1,JLabel.TRAILING);
+	gridb.setConstraints(descr,gbc);
+	fieldp.add(descr);
+	gbc.gridx = 1;
+	gridb.setConstraints(fnameField,gbc);
+	fieldp.add(fnameField);
+
+	gbc.gridy = 2;
+	gbc.gridx = 0;
+	descr = new JLabel(qString2,JLabel.TRAILING);
+	gridb.setConstraints(descr,gbc);
+	fieldp.add(descr);
+	gbc.gridx = 1;
+	gridb.setConstraints(lnameField,gbc);
+	fieldp.add(lnameField);
+
+	gbc.gridy = 3;
+	gbc.gridx = 0;
+	descr = new JLabel(qString3,JLabel.TRAILING);
+	gridb.setConstraints(descr,gbc);
+	fieldp.add(descr);
+	gbc.gridx = 1;
+	gridb.setConstraints(byField,gbc);
+	fieldp.add(byField);
+
+	gbc.gridy = 4;
+	gbc.gridx = 0;
+	descr = new JLabel(qString4,JLabel.TRAILING);
+	gridb.setConstraints(descr,gbc);
+	fieldp.add(descr);
+	gbc.gridx = 1;
+	gridb.setConstraints(gField,gbc);
+	fieldp.add(gField);
+
+	gbc.gridy = 5;
+	gbc.gridx = 0;
+	descr = new JLabel(qString5,JLabel.TRAILING);
+	gridb.setConstraints(descr,gbc);
+	fieldp.add(descr);
+	gbc.gridx = 1;
+	gridb.setConstraints(dField,gbc);
+	fieldp.add(dField);
+
+	process.add(fieldp,BorderLayout.CENTER);
+
+	// Add the buttons
+	JPanel btnpanel = new JPanel();
+	JButton okbtn = new JButton("Add subject");
+	okbtn.addActionListener(new ActionListener() {
+		public void actionPerformed (ActionEvent eact) {
+		    validateAndUpdate();
+		}
+	    });
+	btnpanel.add(okbtn);
+	JButton edbtn = new JButton("Edit subject");
+	edbtn.addActionListener(new ActionListener() {
+		public void actionPerformed (ActionEvent eact) {
+		    validateAndEdit();
+		}
+	    });
+	btnpanel.add(edbtn);
+	JButton srchbtn = new JButton("Search for subject");
+	srchbtn.addActionListener(new ActionListener() {
+		public void actionPerformed (ActionEvent eact) {
+		    searchForSubject();
+		}
+	    });
+	btnpanel.add(srchbtn);
+	JButton clearbtn = new JButton("Clear fields");
+	clearbtn.addActionListener(new ActionListener() {
+		public void actionPerformed (ActionEvent eact) {
+		    clearFields();
+		}
+	    });
+	btnpanel.add(clearbtn);
+	JButton cancelbtn = new JButton("Return");
+	cancelbtn.addActionListener(new ActionListener() {
+		public void actionPerformed (ActionEvent eact) {
+		    closeDialog();
+		}
+	    });
+	btnpanel.add(cancelbtn);
+
+	process.add(btnpanel,BorderLayout.SOUTH);
+	process.setBorder(BorderFactory.createEmptyBorder(10,10,10,10));
+	
+	JPanel subjDialog = new JPanel();
+	subjDialog.setLayout(new BorderLayout());
+	JScrollPane sfPane = new JScrollPane(this.sfList);
+	sfPane.setBorder(BorderFactory.createTitledBorder("Found subjects"));
+	this.sfList.setCellRenderer(new MyCellRenderer());
+	MouseListener mouseListener = new MouseAdapter() {
+		public void mouseClicked(MouseEvent e) {
+		    int index = sfList.locationToIndex(e.getPoint());
+		    subjectChosen(index);
+		}
+	    };
+	this.sfList.addMouseListener(mouseListener);
+    
+
+
+	// Put the gui together
+	subjDialog.add(process, BorderLayout.CENTER);
+	subjDialog.add(sfPane, BorderLayout.SOUTH);
+	
+	setContentPane(subjDialog);
+
+        setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
+
+	pack();
+    }
+
+    private void clearFields() {
+	idField.setText("");
+	fnameField.setText("");
+	lnameField.setText("");
+	byField.setText("");
+	dField.setText("");
+    }
+
+    private void closeDialog() {
+	// If subject is chosen in list of searched
+	// subjects, this will be set in the combobox
+	if (idField.getText().length()>0) {
+	    int ID = Integer.parseInt(this.idField.getText());
+	    this.subjch.setSelectedSubject(ID);
+	}
+	hide();
+    }
+
+
+    private void searchForSubject() {
+	
+	// Call the SubjectChooser to search the database
+	this.subjects =  this.subjch.searchSubject(fnameField.getText(),
+						      lnameField.getText(),
+						      byField.getText(),
+						      (String) gField.getSelectedItem(),
+						      dField.getText());
+	this.sfList.setListData(this.subjects);
+    }
+    
+    private void subjectChosen(int index) {
+	setFields((Subject) this.subjects.elementAt(index));
+    }
+
+    private void setFields(Subject s) {
+	this.idField.setText(Integer.toString(s.getID()));
+	this.fnameField.setText(s.getFirstName());
+	this.lnameField.setText(s.getLastName());
+	this.byField.setText(Integer.toString(s.getYearOfBirth()));
+	if (s.isMale()) {
+	    this.gField.setSelectedIndex(0);
+	} else {
+	    this.gField.setSelectedIndex(1);
+	}
+	this.dField.setText(Integer.toString(s.getDebutYear()));
+    }
+   
+    private void validateAndEdit() {
+	// If id field is empty, then do nothing.
+	if (this.idField.getText().length()<1) {
+	    JOptionPane.showMessageDialog(this,"Before a subject can " +
+					  "be edited, you must search the " +
+					  "database. Enter search criteria " +
+					  "and click the search button. ",
+					  "Warning",
+					  JOptionPane.WARNING_MESSAGE);
+	    return;
+	} 
+	int ID = Integer.parseInt(this.idField.getText());
+	
+	// Need to validate that integers (years) are given for 
+	// two of the fields
+	
+	int birthyear;
+	try {
+	    birthyear = Integer.parseInt(byField.getText());
+	}  catch (NumberFormatException exc) {
+	    JOptionPane.showMessageDialog(this,"Enter the year of birth.",
+					  "Warning",
+					  JOptionPane.WARNING_MESSAGE);
+	    return;
+	}
+	
+	int debutyear;
+	try {
+	    debutyear = Integer.parseInt(dField.getText());
+	}  catch (NumberFormatException exc) {
+	    debutyear = -1;
+	    //	    	    JOptionPane.showMessageDialog(this,
+	    //			  "Enter the year of first diagnosis.",
+	    //			  "Warning",
+	    //			  JOptionPane.WARNING_MESSAGE);
+	    //	    return;
+	}
+	
+	String fname = fnameField.getText();
+	if (fname.length()==0) {
+	    JOptionPane.showMessageDialog(this,
+					  "Enter the first name.",
+					  "Warning",
+					  JOptionPane.WARNING_MESSAGE);
+	    return;
+	}
+	
+	String lname = lnameField.getText();
+	if (lname.length()==0) {
+	    JOptionPane.showMessageDialog(this,
+					  "Enter the first name.",
+					  "Warning",
+					  JOptionPane.WARNING_MESSAGE);
+	    return;
+	}
+	
+	String gender = (String) gField.getSelectedItem();
+	
+	// Call the SubjectChooser to update the database
+	this.subjch.updateSubject(ID,fname,lname,birthyear,gender,
+				  debutyear);
+    }
+
+    private void validateAndUpdate() {
+	// Empty the idField
+	this.idField.setText("");
+
+	// Need to validate that integers (years) are given for 
+	// two of the fields
+
+	int birthyear;
+	try {
+	    birthyear = Integer.parseInt(byField.getText());
+	}  catch (NumberFormatException exc) {
+	    JOptionPane.showMessageDialog(this,"Enter the year of birth.",
+					  "Warning",
+					  JOptionPane.WARNING_MESSAGE);
+	    return;
+	}
+
+	int debutyear;
+	try {
+	    debutyear = Integer.parseInt(dField.getText());
+	}  catch (NumberFormatException exc) {
+	    debutyear = -1;
+	    //	    	    JOptionPane.showMessageDialog(this,
+	    //			  "Enter the year of first diagnosis.",
+	    //			  "Warning",
+	    //			  JOptionPane.WARNING_MESSAGE);
+	    //	    return;
+	}
+
+	String fname = fnameField.getText();
+	if (fname.length()==0) {
+	    JOptionPane.showMessageDialog(this,
+					  "Enter the first name.",
+					  "Warning",
+					  JOptionPane.WARNING_MESSAGE);
+	    return;
+	}
+
+	String lname = lnameField.getText();
+	if (lname.length()==0) {
+	    JOptionPane.showMessageDialog(this,
+					  "Enter the first name.",
+					  "Warning",
+					  JOptionPane.WARNING_MESSAGE);
+	    return;
+	}
+
+	String gender = (String) gField.getSelectedItem();
+
+	// Call the SubjectChooser to update the database
+	this.subjch.addNewSubject(fname,lname,birthyear,gender,
+				  debutyear);
+	//this.setVisible(false);
+	//this.hide();
+    }
+
+    private void addIfUnique(Vector subjs, Vector newSubjs) {
+	for (Enumeration enNew = newSubjs.elements();
+	     enNew.hasMoreElements();) {
+	    boolean unique = true;
+	    Subject newSubj = (Subject) enNew.nextElement();
+	    for (Enumeration en = subjs.elements(); 
+		 en.hasMoreElements();) {
+		if (newSubj.equals((Subject) en.nextElement())) {
+		    unique = false;
+		    break;
+		}
+	    }
+	    if (unique)
+		subjs.add(newSubj);
+	}
+    }
+
+    
+}
+
+class MyCellRenderer extends DefaultListCellRenderer {
+
+    /* This is the only method defined by ListCellRenderer.  We just
+     * reconfigure the Jlabel each time we're called.
+     */
+    public Component getListCellRendererComponent(
+        JList list,
+	Object value,   // value to display
+	int index,      // cell index
+	boolean iss,    // is the cell selected
+	boolean chf)    // the list and the cell have the focus
+    {
+        /* The DefaultListCellRenderer class will take care of
+         * the JLabels text property, it's foreground and background
+         * colors, and so on.
+         */
+        super.getListCellRendererComponent(list, value, index, iss, chf);
+
+        /* Call toListString instead of toString
+         */
+        setText(((Subject) value).toListString());
+	return this;
+    }
+}
+
+    

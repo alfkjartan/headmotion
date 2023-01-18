@@ -1,0 +1,326 @@
+/** 
+ * THis is the main class for the HeadMotion program, which uses a Kalman
+ * filter to track the movement, and a database to store the results.
+ *
+ * @author   Kjartan Halvorsen
+ * @version  1.1 2003-04-09, 1.0 2003-02-24 
+ */
+
+package kha.hm;
+
+import java.io.*;
+import javax.swing.*;
+import javax.swing.event.*;
+import javax.swing.filechooser.*;
+import java.awt.*;
+import java.awt.event.*;
+import java.util.*;
+import java.sql.*;
+import cern.colt.matrix.*;
+
+import kha.db.*;
+import kha.math.*;
+import kha.track.*;
+
+public class HeadMotion {
+
+    public static HeadMotion hm;
+
+    private JFrame parentframe;
+    private JPanel gui;
+    private JLabel statusl;
+
+    private HeadMotionDB database;
+
+    private static final String BONJOVI = "jdbc:hsqldb:hsql://130.238.151.84:9001:"; 
+
+    private HeadMotion(String db_url, String user, String passwd,
+		       JFrame parent) {
+
+
+	// Start up the database
+	this.database = HeadMotionDB.getDB(db_url,user,passwd);
+	
+	this.parentframe = parent;
+
+	createGUI(this.database);
+    }
+
+    public  Component getGUI() {
+	return this.gui;
+    }
+
+
+
+    private void createGUI(HeadMotionDB db) {
+	JTabbedPane tabpane = new JTabbedPane();
+
+	JPanel process = new JPanel();
+	process.setLayout(new BorderLayout());
+
+	// Add the trial gui
+	process.add(TrialGUI.getInstance(db),BorderLayout.CENTER);
+	
+
+	// Add the buttons
+	JPanel btnpanel = new JPanel();
+	JButton okbtn = new JButton("Process");
+	okbtn.addActionListener(TrialGUI.getActionListener());
+	okbtn.setToolTipText("Processes the trial and add the" +
+			     " result to the database");
+	btnpanel.add(okbtn);
+	JButton correctbtn = new JButton("Correct trial");
+	correctbtn.addActionListener(TrialGUI.getActionListener());
+	correctbtn.setToolTipText("Use this button to correct the " +
+				  "information for the current trial");
+	btnpanel.add(correctbtn);
+	JButton deletebtn = new JButton("Delete trial");
+	deletebtn.addActionListener(TrialGUI.getActionListener());
+	deletebtn.setToolTipText("Use this button to delete the current " +
+				 "trial from the database");
+	btnpanel.add(deletebtn);
+	JButton closebtn = new JButton("Close");
+	closebtn.addActionListener(new ActionListener() {
+		public void actionPerformed (ActionEvent eact) {
+		    close();
+		}
+	    });
+	closebtn.setToolTipText("Closes the program");
+	btnpanel.add(closebtn);
+
+	JButton cclosebtn = new JButton("Close compact");
+	cclosebtn.addActionListener(new ActionListener() {
+		public void actionPerformed (ActionEvent eact) {
+		    close(true);
+		}
+	    });
+	cclosebtn.setToolTipText("Closes the program and makes the database minimal size");
+
+	btnpanel.add(cclosebtn);
+
+	JPanel bottomp = new JPanel();
+	bottomp.setLayout(new BoxLayout(bottomp,BoxLayout.Y_AXIS));
+
+
+	bottomp.add(btnpanel);
+	
+	process.add(bottomp,BorderLayout.SOUTH);
+
+	tabpane.add("Process",process);
+
+
+	//Then the search GUI
+	JPanel search = new JPanel();
+	search.setLayout(new BorderLayout());
+	search.add(SearchTrial.getInstance(db,TrialGUI.getInstance(db),
+					   tabpane));
+
+	// Add some buttons
+	JPanel btnpanels = new JPanel();
+	//JButton clearbtn = new JButton("Clear list");
+	//clearbtn.addActionListener(SearchTrial.getActionListener());
+	//btnpanels.add(clearbtn);
+	JButton editbtn = new JButton("Edit trial");
+	editbtn.addActionListener(SearchTrial.getActionListener());
+	btnpanels.add(editbtn);
+	JButton deletebtn2 = new JButton("Delete trials");
+	deletebtn2.addActionListener(SearchTrial.getActionListener());
+	deletebtn2.setToolTipText("Use this button to delete the current " +
+				 "trial from the database");
+	btnpanels.add(deletebtn2);
+	closebtn = new JButton("Close");
+	closebtn.addActionListener(new ActionListener() {
+		public void actionPerformed (ActionEvent eact) {
+		    close();
+		}
+	    });
+	btnpanels.add(closebtn);
+	
+	search.add(btnpanels,BorderLayout.SOUTH);
+
+	tabpane.add("Search", search);
+
+
+	// Then the analyze GUI
+	JPanel analyze = new JPanel();
+	analyze.setLayout(new BorderLayout());
+	analyze.add(AnalyzeGUI.getInstance(db,
+					   TrialGUI.getInstance(db),
+					   this.parentframe),
+		    BorderLayout.CENTER);
+
+	// Add some buttons
+	JPanel btnpanel2 = new JPanel();
+	okbtn = new JButton("Analyze");
+	okbtn.addActionListener(AnalyzeGUI.getActionListener());
+	btnpanel2.add(okbtn);
+	closebtn = new JButton("Close");
+	closebtn.addActionListener(new ActionListener() {
+		public void actionPerformed (ActionEvent eact) {
+		    close();
+		}
+	    });
+	btnpanel2.add(closebtn);
+	
+	analyze.add(btnpanel2,BorderLayout.SOUTH);
+
+	tabpane.add("Analyze", analyze);
+
+	// And a label for status information at the bottom
+	JPanel jpstatus = new JPanel();
+	jpstatus.setBorder(
+		     BorderFactory.createTitledBorder("Status"));
+	this.statusl = new JLabel();
+	statusl.setMinimumSize(new Dimension(240,60));
+	jpstatus.add(this.statusl);
+
+
+	// Putting it together
+	this.gui = new JPanel();
+	this.gui.setLayout(new BorderLayout());
+	this.gui.add(tabpane, BorderLayout.CENTER);
+	this.gui.add(jpstatus, BorderLayout.SOUTH);
+    }
+
+    private void close() {
+	close(false);
+    }
+
+    private void close(boolean compact) {
+	statusl.setText("Closing down the connection to the database");
+	parentframe.repaint();
+	this.database.close(compact);
+	System.exit(0);
+    }
+
+
+
+    public boolean askUserYesNo(String s) {
+	int answer = JOptionPane.showConfirmDialog(this.gui, 
+						   s, "Question",
+						   JOptionPane.YES_NO_OPTION);
+	return (answer == JOptionPane.YES_OPTION);
+    }
+
+
+    public static boolean askUserYesNo(String s, Component c) {
+	int answer = JOptionPane.showConfirmDialog(c, 
+						   s, "Question",
+						   JOptionPane.YES_NO_OPTION);
+	return (answer == JOptionPane.YES_OPTION);
+    }
+
+
+    public void warnUser(String s) {
+	JOptionPane.showMessageDialog(this.gui,
+				      s,
+				      "Warning",
+				      JOptionPane.WARNING_MESSAGE);
+    }
+
+    public static void warnUser(String s, Component c) {
+	JOptionPane.showMessageDialog(c,
+				      s,
+				      "Warning",
+				      JOptionPane.WARNING_MESSAGE);
+    }
+
+    public void tellUser(String s) {
+	JOptionPane.showMessageDialog(this.gui,
+				      s,
+				      "Information",
+				      JOptionPane.INFORMATION_MESSAGE);
+    }
+
+    public static void tellUser(String s, Component c) {
+	JOptionPane.showMessageDialog(c,
+				      s,
+				      "Information",
+				      JOptionPane.INFORMATION_MESSAGE);
+    }
+
+    
+    /** Writes result to a text file */
+    static public void dumpToFile(DoubleMatrix2D data, String[] headings,
+				  String fname, Component comp) {
+	boolean wrote = false;
+
+	//Create a file chooser
+	JFileChooser fc = new JFileChooser();
+	
+	try { //to set the file to use
+	    int ext = fname.lastIndexOf(".");
+	    File thefile = new File(fname.substring(0,ext) + "txt");
+	    fc.setSelectedFile(thefile);
+	} catch (Exception exc) {
+	    System.err.println("Could not specify the file name");
+	    System.err.println(fname);
+	}
+
+	ExtensionFileFilter mfilter = 
+	    new ExtensionFileFilter("txt",
+				    "text files");
+	fc.setFileFilter(mfilter);
+	int returnVal = fc.showSaveDialog(comp);
+	if (returnVal == JFileChooser.APPROVE_OPTION) {
+	    File file = new File("Unnamed");
+	    try {
+		file = fc.getSelectedFile();
+		PrintWriter out = new PrintWriter(
+				  new BufferedWriter(new FileWriter(file)));
+		for (int i=0;i<headings.length-1;i++) {
+		    out.print(headings[i]);
+		    out.print("\t");
+		}
+		out.print(headings[headings.length-1]);
+		out.println();
+		
+		for (int i=0; i<data.rows(); i++) {
+		    for (int j=0; j<data.columns()-1; j++) {
+			out.print(data.getQuick(i,j));
+			out.print("\t");
+		    }
+		    out.print(data.getQuick(i,data.columns()-1));
+		    out.println();
+		}
+		wrote=true;
+	    } catch (IOException ioex) {
+		System.err.println("Unable to write to file:");
+		System.err.println(file.toString());
+	    }
+	}
+    }
+
+    public static void main(String[] args) {
+	String url = "jdbc:hsqldb:hmtestdb";
+	String user = "sa";
+	String passwd = "";
+	switch (args.length) {
+	case 1:
+	    url = args[0];
+	case 2:
+	    url = args[0];
+	    user = args[1];
+	case 3:
+	    url = args[0];
+	    user = args[1];
+	    passwd = args[2];
+	}
+
+	
+	JFrame fr = new JFrame("HeadMotion");
+
+	hm = new HeadMotion(url, user, passwd, fr);
+	
+	fr.getContentPane().add(hm.getGUI());
+        fr.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+	
+	fr.pack();
+        fr.setVisible(true);
+	hm.statusl.setText("Connected to database: " + url);
+    }
+}
+
+
+
+    

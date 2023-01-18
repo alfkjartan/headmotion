@@ -1,0 +1,455 @@
+/** 
+ * GUI that lets the user enter a information and data for a new trial.
+ * Singleton.
+ *
+ * @author   Kjartan Halvorsen
+ * @version  1.0  2003-04-09
+ */
+
+package kha.hm;
+
+import java.util.*;
+import java.text.*;
+import javax.swing.*;
+import javax.swing.event.*;
+import javax.swing.filechooser.*;
+import java.awt.*;
+import java.awt.event.*;
+import java.sql.*;
+
+import cern.colt.matrix.*;
+
+import kha.db.*;
+import kha.track.*;
+
+public class TrialGUI extends JPanel implements ActionListener {
+
+    private static TrialGUI theGUI = null;
+
+    private Runtime runtime =  Runtime.getRuntime();
+
+    private HeadMotionDB database;
+
+    private Vector trialfields;
+    private Vector datafields;
+    private Field tsvfile;
+    private Field tsvtimestamp;
+    private Field markerset;
+    private Field bandwidth;
+    private Field tsvattr;
+    private Field tsvdata;
+    private Field resultdata;
+    
+    private Trial currentTrial = null;
+
+    private TrialGUI(HeadMotionDB database) {
+	super();
+	
+	this.database = database;
+
+	createTrialFields();
+	
+	createGUI();
+
+    }
+
+    public static TrialGUI getInstance(HeadMotionDB database) {
+	if (theGUI == null) {
+	    theGUI = new TrialGUI(database);
+	}
+	return theGUI;
+    }
+
+    public static ActionListener getActionListener() {
+	return theGUI;
+    }
+
+
+    /**
+     * Sets the fields according to a given Trial object.
+     * @param tr  Trial object, whose information is to be set to the fields
+     */
+    public void setFields(Trial tr) {
+	this.currentTrial = tr;
+	for (Enumeration en = this.trialfields.elements(); 
+	     en.hasMoreElements();) 
+	    tr.setField((Field) en.nextElement());
+	for (Enumeration en = this.datafields.elements(); 
+	     en.hasMoreElements();) 
+	    tr.setField((Field) en.nextElement());
+    }
+
+    /**
+     * Sets the attributes of the current Trial object, according to the
+     * fields
+     */
+    public void setTrialAttributes() {
+	if (this.currentTrial != null) {
+	    for (Iterator it = this.trialfields.iterator(); 
+	     it.hasNext();) 
+		this.currentTrial.setAttribute((Field) it.next());
+	    for (Iterator it = this.datafields.iterator(); 
+		 it.hasNext();) 
+		this.currentTrial.setAttribute((Field) it.next());
+	}
+    }
+
+	
+    /**
+     *Implementation of the ActionListener interface 
+     */
+    public void actionPerformed(ActionEvent e) {
+	if (e.getActionCommand().equals("Process"))
+	    this.process();
+	else if (e.getActionCommand().equals("Correct trial"))
+	    this.correct();
+	else if (e.getActionCommand().equals("New trial")) {
+	    this.currentTrial = null;
+	    this.tsvtimestamp.setValue(null);
+	}
+	else if (e.getActionCommand().equals("Delete trial")) {
+	    if (this.currentTrial != null & 
+		HeadMotion.hm.askUserYesNo("Delete all selected trials " +
+					   "from the database?")) {
+		this.currentTrial.removeFromDatabase(this.database);
+		this.currentTrial = null;
+		this.tsvtimestamp.setValue(null);
+	    }
+	}
+    }
+
+    /*
+     * Htting the "Process" button ends up here
+     */ 
+    private void process() {
+	// Process the trial
+	boolean go = true;
+
+	if (this.currentTrial == null)
+	    go = loadData(tsvfile,tsvattr,tsvdata,tsvtimestamp);
+
+	if (go) {
+	    try {
+		if (this.currentTrial == null) 
+		    this.currentTrial = new Trial();
+
+		if (!verified(this.trialfields)) return;
+		setTrialAttributes();
+
+		System.err.println("Starting Trial.process()");
+		this.currentTrial.process(); // May throw TrackException
+		System.err.println("Trial.process() returned");
+
+		// When the trial is processed, some of the
+		// attributes changes: Update the fields
+		setFields(this.currentTrial);
+
+		// update the database
+		this.database.saveTrial(this.trialfields,
+					this.datafields); 
+		                        // May throw SQLException 
+	    } catch (InvalidFieldException ife) {
+		HeadMotion.warnUser(ife.getMessage(),this);
+	    } catch (TrackException texc) {
+		if (texc.wrongMarkers()) {
+		    StringBuffer mnames = 
+			new StringBuffer("One or more markers in the " +
+					 "marker set not found. " +
+					 "Try another marker set.\n" +
+					 "Available markers:\n");
+		    for (Enumeration en=texc.getMarkerSet();
+			 en.hasMoreElements();) {
+			mnames.append((String) en.nextElement());
+			mnames.append(", ");
+		}
+		    mnames.delete(mnames.length()-2,mnames.length()-1);
+		    HeadMotion.warnUser(mnames.toString(),this);
+		    return;
+		}
+		else if (texc.diverged()) {
+		    HeadMotion.warnUser("The Kalman filter algorithm failed",
+					this);
+		    return;
+		}
+	    } catch (SQLException sqle) {
+		if (sqle.getMessage().lastIndexOf("Violation of unique index") 
+		    > -1) {
+		    if (HeadMotion.askUserYesNo("The trial already exists in " +
+						" the database.\n" +
+						"Do you want to replace it?",
+						this)) {
+			this.tsvtimestamp.setValue(
+					 this.currentTrial.getTimestamp());
+			try {
+			    this.database.saveTrialForced(this.trialfields,
+							  this.datafields,
+							  this.tsvtimestamp); 
+			} catch (SQLException sqlle) {
+			    HeadMotion.warnUser("Failed to replace trial in " +
+						"database", this);
+			}
+		    }
+		}
+		else
+		    HeadMotion.warnUser("Could not save the trial:\n" +
+					sqle.getMessage(), this);
+	    }		
+	    
+	    this.tsvattr.setValue(null);
+	    this.tsvdata.setValue(null);
+	    this.resultdata.setValue(null);
+	    
+	    this.currentTrial.freeMemory();
+	    runtime.gc();
+	}
+    }
+
+    /*
+     * Htting the "Correct trial" button ends up here
+     */ 
+    private void correct() {
+	// Correct info about the trial
+	try {
+	    if (verified(this.trialfields)) {
+		if (this.tsvtimestamp.getValue() != null) {
+		    // update the database
+		    if (!this.database.updateTrial(this.trialfields,
+						   this.tsvtimestamp)) 
+			HeadMotion.warnUser("Unable to correct  trial in "
+					    + "the database", this);
+		    else {
+			HeadMotion.tellUser("Updated information for trial "+
+					    " with timestamp:\n" +
+					    this.tsvtimestamp.getValue(),
+					    this);
+			setTrialAttributes();
+		    }
+		} else 
+		    HeadMotion.warnUser("No trial to correct", this);
+	    } else
+		HeadMotion.warnUser("One or more fields are invalid. " +
+				    "Cannot correct trial", this);
+	} catch (InvalidFieldException ife) {
+	    HeadMotion.warnUser(ife.getMessage(),this);
+	}
+    }
+
+
+    /**
+     * Reads the tsv file and loads the attributes and data fields
+     */
+    private boolean loadData(Field tsvfile, Field tsvattr, 
+			  Field tsvdata, Field timestamp) {
+	TrackBody tb = new TrackBody((String)tsvfile.getValue(),1.0,
+	new String[] {""});
+	if (tb.isOK()) {
+	    tsvattr.setValue(tb.getAttributes());
+	    tsvdata.setValue(tb.getMarkerData());
+	    timestamp.setValue(Trial.getTimestamp(tb.getAttributes()));
+	} 
+	return tb.isOK();
+    }
+
+    /** 
+     * Mostly used for testing
+     */
+    Vector getFields() {
+	return this.trialfields;
+    }
+
+    private boolean verified(Vector fields) throws InvalidFieldException{
+	boolean ok = true;
+	for (Enumeration en = fields.elements();
+	     en.hasMoreElements();) {
+	    if (!((Field) en.nextElement()).verify()) {
+		ok = false;
+		break;
+	    }
+	}
+	return ok;
+    }
+
+    private void createTrialFields() {
+	this.trialfields = new Vector(20);
+	this.datafields = new Vector(3);
+
+	// The subject field is special, since it is connected to
+	// the subject database
+	Field sc = SubjectChooser.getInstance(this.database);
+	this.trialfields.add(sc);
+
+	ResultSet rs = null;
+	FieldFactory ff = FieldFactory.FF;
+
+	boolean mutable = true;
+	boolean searchable = true;
+
+	Field diagn;
+	rs = this.database.inquire("SELECT diagnosis FROM " +
+				   HeadMotionDB.TRIAL_TABLE);
+	diagn = ff.createField(ff.INT,
+			       "diagnosis",
+			       "Diagnosis (integer) ",
+			       mutable,
+			       searchable,
+			       rs);
+	this.trialfields.add(diagn);
+	
+	Vector vec = new Vector(5);
+	vec.addElement("None");
+	vec.addElement("Botox");
+	vec.addElement("Dysport");
+	vec.addElement("Neurobloc");
+	vec.addElement("Other");
+
+	Field medic = ff.createField(ff.STRING,
+			       "medication",
+			       "Medication (string) ",
+			       mutable,
+			       searchable,
+			       vec);
+	this.trialfields.add(medic);
+
+	Field med_start = ff.createField(ff.DATE,
+					 "medication_start",
+					 "Start of medication ",
+					 mutable,
+					 !searchable);
+	this.trialfields.add(med_start);
+	
+	vec = new Vector(2);
+	vec.addElement("No");
+	vec.addElement("Yes");
+	Field pt = ff.createField(ff.STRING,
+				  "phys_therapy",
+				  "Physical therapy ",
+				  !mutable,
+				  searchable,
+				  vec);
+	this.trialfields.add(pt);
+
+	Field pt_start = ff.createField(ff.DATE,
+					"pt_start",
+					"Start of PT ",
+					mutable,
+					!searchable);
+	this.trialfields.add(pt_start);
+
+	vec = new Vector(1);
+	vec.addElement(new Integer(1));
+	Field toc = ff.createField(ff.INT,
+				   "test_occasion",
+				   "Test occasion (integer) ",
+				   mutable,
+				   searchable,
+				   vec);
+	this.trialfields.add(toc);
+	
+	vec = new Vector(5);
+	vec.addElement("still");
+	vec.addElement("left-right");
+	vec.addElement("right-left");
+	vec.addElement("up-down");
+	vec.addElement("down-up");
+	Field ttype = ff.createField(ff.STRING,
+				     "test_type",
+				     "Test type ",
+				     !mutable,
+				     searchable,
+				     vec);
+	this.trialfields.add(ttype);
+
+	vec = new Vector(2);
+	vec.addElement("huvud1,huvud2,huvud3,huvud4");
+	vec.addElement("marker-1huvud,marker-2huvud,marker-3huvud,marker-4huvud");
+	this.markerset = ff.createField(ff.STRING,
+					 "marker_set",
+					 "Marker set ",
+					 mutable,
+					 !searchable,
+					 vec);
+	this.trialfields.add(this.markerset);
+	
+	vec = new Vector(2);
+	vec.addElement(new Double(1.0));
+	this.bandwidth = ff.createField(ff.FLOAT,
+					 "bandwidth_param",
+					 "Bandwidth parameter ",
+					 mutable,
+					 !searchable,
+					 vec); 
+	this.trialfields.add(this.bandwidth);
+
+	this.tsvfile = new FileChooser("tsv_file",
+				       "Marker data ",
+				       this);
+	
+
+	this.tsvtimestamp = ff.createTimestampField("tsv_timestamp",
+						    "Timestamp ");
+	this.trialfields.add(this.tsvtimestamp);
+	this.datafields.add(this.tsvtimestamp);
+	
+	this.tsvattr = ff.createOtherField("tsv_attr");
+	this.datafields.add(this.tsvattr);
+
+	this.tsvdata = ff.createOtherField("tsv_data");
+	this.datafields.add(this.tsvdata);
+
+	this.resultdata = ff.createOtherField("results_data");
+	this.datafields.add(this.resultdata);
+
+	
+    }
+
+    private void createGUI() {
+	setLayout(new BorderLayout());
+
+	// Add the gui for each database field
+	JPanel fieldp = new JPanel();
+	GridBagLayout gridb = new GridBagLayout();
+	GridBagConstraints gbc = new GridBagConstraints();
+	fieldp.setLayout(gridb);
+	
+	int row = 0;
+	gbc.weightx = 0.5;
+	gbc.fill = GridBagConstraints.HORIZONTAL; 
+
+	for (Enumeration e = trialfields.elements(); e.hasMoreElements();) {
+	    Field thefield = (Field) e.nextElement(); 
+	    JLabel descr = new JLabel(thefield.getName(),JLabel.TRAILING);
+	    Component fgui = thefield.getAddGUI();
+
+	    if (fgui != null) {
+		gbc.gridy = row;
+		gbc.gridx = 0;
+		gridb.setConstraints(descr,gbc);
+		fieldp.add(descr);
+
+		gbc.gridx = 1;
+		gridb.setConstraints(fgui,gbc);
+		fieldp.add(fgui);
+		row++;
+	    }
+	}
+
+	JLabel descr = new JLabel(tsvfile.getName(), JLabel.TRAILING);
+	Component fgui = tsvfile.getAddGUI();
+	gbc.gridy = row;
+	gbc.gridx = 0;
+	gridb.setConstraints(descr,gbc);
+	fieldp.add(descr);
+	gbc.gridx = 1;
+	gridb.setConstraints(fgui,gbc);
+	fieldp.add(fgui);
+
+	fieldp.setBorder(
+			 BorderFactory.createCompoundBorder(
+			    BorderFactory.createTitledBorder("Trial"),
+	       BorderFactory.createEmptyBorder(6,3,6,3)));
+
+	add(fieldp,BorderLayout.CENTER);
+
+    }
+}
+
